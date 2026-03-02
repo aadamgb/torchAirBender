@@ -1,0 +1,13 @@
+defaults:
+  - env: hover
+  - dynamics: quadrotor
+  - _self_
+
+
+
+device: "cuda"
+dt: 0.01
+
+num_envs: 2
+episodes: 100
+steps: 500

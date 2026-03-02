@@ -1,0 +1,4 @@
+env:
+  name: hover
+device: cuda
+dt: 0.01
