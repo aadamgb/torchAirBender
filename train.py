@@ -1,6 +1,7 @@
 import hydra
 from omegaconf import DictConfig
 import importlib
+import time
 
 
 @hydra.main(config_path="cfg", config_name="train_config")
@@ -16,4 +17,6 @@ def main(cfg: DictConfig):
     environment.train(cfg)
 
 if __name__ == "__main__":
+    start = time.time()
     main()
+    print(f"Execution time: {time.time() - start:.2f}s")

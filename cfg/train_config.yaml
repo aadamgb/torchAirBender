@@ -1,6 +1,7 @@
 defaults:
   - env: hover
   - dynamics: quadrotor
+  - renderer: replay
   - _self_
 
 

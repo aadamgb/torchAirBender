@@ -14,13 +14,12 @@ def quat_to_rotmat(q: Tensor) -> Tensor:
         R : (B, 3, 3)
     """
     w, x, y, z = q[..., 0], q[..., 1], q[..., 2], q[..., 3]
-    # B = q.shape[0]
 
     R = torch.stack([
-        1 - 2*(y*y + z*z),   2*(x*y - w*z),       2*(x*z + w*y),
-        2*(x*y + w*z),       1 - 2*(x*x + z*z),   2*(y*z - w*x),
-        2*(x*z - w*y),       2*(y*z + w*x),       1 - 2*(x*x + y*y),
-    ], dim=-1).reshape(-1, 3, 3)
+        torch.stack([1 - 2*(y*y + z*z),     2*(x*y - w*z),     2*(x*z + w*y)], dim=-1),  # row 0
+        torch.stack([    2*(x*y + w*z), 1 - 2*(x*x + z*z),     2*(y*z - w*x)], dim=-1),  # row 1
+        torch.stack([    2*(x*z - w*y),     2*(y*z + w*x), 1 - 2*(x*x + y*y)], dim=-1),  # row 2
+    ], dim=-2)  # (B, 3, 3)
 
     return R
 

@@ -68,14 +68,14 @@ def _translational_deriv(
         m  : (N,) or (1,)
         g  : (3,)
     """
-    R = quat_to_rotmat(q)                                           # (B, 3, 3)
+    R = quat_to_rotmat(q) 
 
     thrust_body = torch.stack(
         [torch.zeros_like(Fz), torch.zeros_like(Fz), Fz], dim=-1
-    ).unsqueeze(-1)                                                 # (B, 3, 1)
-    thrust_world = torch.bmm(R, thrust_body).squeeze(-1)           # (B, 3)
+    ).unsqueeze(-1)                                                   # (B, 3, 1)
+    thrust_world = torch.bmm(R, thrust_body).squeeze(-1)              # (B, 3)
 
-    v_dot = thrust_world / m.unsqueeze(-1) + g                     # (B, 3)
+    v_dot = thrust_world / m.unsqueeze(-1) + g                        # (B, 3)
     return v, v_dot
 
 
@@ -102,7 +102,7 @@ def _rotational_deriv(
 
 
 @torch.jit.script
-def _step_core(
+def _step_pmm(
     state:         Tensor,
     action:        Tensor,
     alloc_matrix:  Tensor,
@@ -215,8 +215,8 @@ class QuadrotorDynamics:
             next_state : (B, 13)
         """
         # Delegates entirely to the JIT-compiled core function.
-        # All Python overhead is eliminated inside _step_core.
-        return _step_core(
+        # All Python overhead is eliminated inside _step_pmm.
+        return _step_pmm(
             state,
             action,
             self._alloc_matrix,

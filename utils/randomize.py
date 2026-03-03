@@ -1,4 +1,5 @@
 import torch
+from torch import Tensor
 from typing import NamedTuple
 from omegaconf import DictConfig
 
@@ -8,15 +9,15 @@ class QuadrotorParams(NamedTuple):
     Per-environment physical parameters.
     Each field is a (num_envs,) tensor, except J and C_D which are (num_envs, 3).
     """
-    mass: torch.Tensor        # (N,)
-    arm_length: torch.Tensor  # (N,)
-    arm_angle: torch.Tensor  # (N,)
-    J: torch.Tensor           # (N, 3)
-    km: torch.Tensor           # (N, )
-    # kf: torch.Tensor          # (N,)
-    # km: torch.Tensor          # (N,)
-    # motor_tau: torch.Tensor   # (N,)
-    # C_D: torch.Tensor         # (N, 3)
+    mass: Tensor        # (N,)
+    arm_length: Tensor  # (N,)
+    arm_angle: Tensor  # (N,)
+    J: Tensor           # (N, 3)
+    km: Tensor           # (N, )
+    # kf: Tensor          # (N,)
+    # km: Tensor          # (N,)
+    # motor_tau: Tensor   # (N,)
+    # C_D: Tensor         # (N, 3)
 
 
 def randomize_parameters(
@@ -24,6 +25,7 @@ def randomize_parameters(
     num_envs: int,
     device: torch.device,
     dtype: torch.dtype = torch.float32,
+    generator: torch.Generator | None = None
 ) -> QuadrotorParams:
     """
     Args:
@@ -38,7 +40,7 @@ def randomize_parameters(
     # 1. Scale factor c ~ Uniform(sf.min, sf.max)
     # ------------------------------------------------------------------
     c = torch.rand(
-        num_envs, device=device, dtype=dtype
+        num_envs, device=device, dtype=dtype, generator=generator
     ) * (cfg.sf.max - cfg.sf.min) + cfg.sf.min
 
     # ------------------------------------------------------------------
@@ -90,9 +92,14 @@ def randomize_parameters(
     # ------------------------------------------------------------------
     # 9. Independent multiplicative noise
     # ------------------------------------------------------------------
+    # def add_noise(x):
+    #     noise = (
+    #         torch.rand_like(x, generator=generator) * 2.0 - 1.0
+    #     ) * cfg.nf
+    #     return x * (1.0 + noise)
     def add_noise(x):
         noise = (
-            torch.rand_like(x) * 2.0 - 1.0
+            torch.rand(x.shape, device=x.device, dtype=x.dtype, generator=generator) * 2.0 - 1.0
         ) * cfg.nf
         return x * (1.0 + noise)
 
