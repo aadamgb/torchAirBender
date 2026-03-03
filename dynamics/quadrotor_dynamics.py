@@ -155,7 +155,8 @@ class QuadrotorDynamics:
         self.device = torch.device(cfg.device)
         self.dt     = cfg.dt
 
-        self.g = torch.tensor([0.0, 0.0, -9.81], device=self.device)  # (3,)
+        self.G = torch.tensor([0.0, 0.0, -9.81], device=self.device)  # (3,)
+        self.g = 9.81
 
         self.m = torch.tensor(
             [cfg.dynamics.mass.nominal], device=self.device
@@ -222,7 +223,7 @@ class QuadrotorDynamics:
             self._alloc_matrix,
             self.m,
             self.J,
-            self.g,
+            self.G,
             self.dt,
         )
 
@@ -248,6 +249,11 @@ class QuadrotorDynamics:
             'inertia':    self.J,
             'km':         self.km,
         }
+    
+
+    def get_srt_hover(self):
+        return self.m * self.g / 4.0
+
 
 
 # ===========================================================

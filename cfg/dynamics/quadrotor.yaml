@@ -28,6 +28,10 @@ arm_angle:
   nominal: 45.0 # [deg]  (X-config)
   min: 45.0 
   max: 45.0 
+# arm_angle: 
+#   nominal: 0.0 # [deg]  (X-config)
+#   min: 0.0 
+#   max: 0.0 
 
 # Mass [kg]
 mass:

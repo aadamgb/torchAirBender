@@ -1,5 +1,6 @@
 import taichi as ti
 import numpy as np
+import math
 
 
 # ---------------------------------------------------------------------------
@@ -7,17 +8,14 @@ import numpy as np
 # ---------------------------------------------------------------------------
 
 def enu_to_ti(pts: np.ndarray) -> np.ndarray:
-    """
-    ENU (x-East, y-North, z-Up)  →  Taichi (x, y=z_enu, z=-y_enu)
-    Accepts (..., 3) numpy arrays.
-    """
+    """ENU (x-East, y-North, z-Up) -> Taichi (x, y=z_enu, z=-y_enu)"""
     out = pts[..., [0, 2, 1]].copy()
     out[..., 2] *= -1
     return out
 
 
 def quat_to_rotmat(q: np.ndarray) -> np.ndarray:
-    """Hamilton [w, x, y, z] → 3×3 rotation matrix (ENU)."""
+    """Hamilton [w, x, y, z] -> 3x3 rotation matrix (ENU)."""
     w, x, y, z = q
     return np.array([
         [1 - 2*(y*y + z*z),  2*(x*y - w*z),      2*(x*z + w*y)],
@@ -35,7 +33,8 @@ class BaseRenderer:
     Renders:
       - Checkerboard ground plane + grid lines
       - World-frame axes  (X=red, Y=green, Z=blue)
-      - A sphere at the body position with body-frame axes
+      - Quadrotor body: two crossing arm lines + centre sphere + 4 motor spheres
+      - Body-frame axes
 
     Controls:
         LMB + drag  : orbit camera
@@ -43,46 +42,79 @@ class BaseRenderer:
         Space       : pause / resume
         R           : restart
         O           : toggle axes
-        Q / Esc     : quit
+        X / Esc     : quit
     """
 
     _AXIS_COLORS = [
-        (0.9, 0.15, 0.15),   # X — red
-        (0.15, 0.9, 0.15),   # Y — green
-        (0.15, 0.15, 0.9),   # Z — blue
+        (0.9, 0.15, 0.15),   # X - red
+        (0.15, 0.9, 0.15),   # Y - green
+        (0.15, 0.15, 0.9),   # Z - blue
     ]
 
     def __init__(
         self,
         trajectory:  np.ndarray,  # (T, 13) ENU: pos[0:3] vel[3:6] quat_wxyz[6:10] omega[10:13]
         arm_length:  float,
+        arm_angle:   float,
+        mass:        float,
         dt:          float,
         window_size: tuple = (1280, 720),
     ):
-        self._traj       = np.array(trajectory, dtype=np.float32)   # (T, 13)
+        self._traj       = np.array(trajectory, dtype=np.float32)
         self._T          = len(self._traj)
         self._arm_len    = arm_length
+        self._arm_angle  = arm_angle
         self._dt         = dt
         self._win_size   = window_size
         self._axis_scale = arm_length * 1.5
 
+        # Sphere radius scales with mass: normalised so ~0.5 kg -> ~arm*0.10
+        self._sphere_r = arm_length * 0.08 * (mass / 0.5) ** (1/3) 
+        self._motor_r  = self._sphere_r * 0.75
+
         # Precompute all positions in Taichi coords
-        centers_enu   = self._traj[:, 0:3]                          # (T, 3) ENU
-        self._centers = enu_to_ti(centers_enu)                      # (T, 3) Taichi
+        centers_enu   = self._traj[:, 0:3]           # (T, 3) ENU
+        actions      = self._traj[:, 13:17]   # (T, 4) thrust per motor [N]
+        self._centers = enu_to_ti(centers_enu)        # (T, 3) Taichi
 
         # Precompute body axis tips in Taichi coords
-        bases_enu = self._axis_scale * np.eye(3, dtype=np.float32)  # (3, 3)
+        bases_enu = self._axis_scale * np.eye(3, dtype=np.float32)
         tips_enu  = np.zeros((self._T, 3, 3), dtype=np.float32)
         for t in range(self._T):
             R = quat_to_rotmat(self._traj[t, 6:10])
             tips_enu[t] = centers_enu[t] + (R @ bases_enu.T).T
-        self._body_axis_tips = enu_to_ti(tips_enu)                  # (T, 3, 3) Taichi
+        self._body_axis_tips = enu_to_ti(tips_enu)    # (T, 3, 3) Taichi
 
-        # Camera framing from trajectory bounds
-        p_min         = self._centers.min(axis=0)
-        p_max         = self._centers.max(axis=0)
-        self._p_mid   = 0.5 * (p_min + p_max)
-        self._extent  = max(float(np.linalg.norm(p_max - p_min)), 2.0)
+        # Precompute arm tip positions in Taichi coords
+        # 4 arms radiating from centre using arm_angle offset
+        s, c = math.sin(math.radians(arm_angle)), math.cos(math.radians(arm_angle))
+        arm_dirs_body = arm_length * np.array([
+            [ s, -c, 0],   # motor 1
+            [ s,  c, 0],   # motor 2
+            [-s,  c, 0],   # motor 3
+            [-s, -c, 0],   # motor 4
+        ], dtype=np.float32)                           # (4, 3) body-frame ENU
+
+        arm_tips_enu = np.zeros((self._T, 4, 3), dtype=np.float32)
+        for t in range(self._T):
+            R = quat_to_rotmat(self._traj[t, 6:10])
+            arm_tips_enu[t] = centers_enu[t] + (R @ arm_dirs_body.T).T
+        self._arm_tips = enu_to_ti(arm_tips_enu)       # (T, 4, 3) Taichi
+
+        # Thrust vector
+        thrust_scale = 0.1
+        body_z = np.array([0, 0, 1], dtype=np.float32)
+
+        thrust_tips_enu = np.zeros((self._T, 4, 3), dtype=np.float32)
+        for t in range(self._T):
+            R = quat_to_rotmat(self._traj[t, 6:10])
+            world_z = R @ body_z                          # (3,) thrust direction in world ENU
+            max_thrust = actions[t].max() + 1e-6          # normalise relative to max motor
+            for i in range(4):
+                magnitude = actions[t, i] / max_thrust    # 0..1
+                thrust_tips_enu[t, i] = arm_tips_enu[t, i] + world_z * magnitude * thrust_scale
+
+        self._thrust_tips = enu_to_ti(thrust_tips_enu)    # (T, 4, 3)
 
         ti.init(arch=ti.cpu)
 
@@ -91,7 +123,7 @@ class BaseRenderer:
         self._build_body_fields()
 
     # ------------------------------------------------------------------
-    # Geometry builders — called once in __init__
+    # Geometry builders - called once in __init__
     # ------------------------------------------------------------------
 
     def _build_ground(self):
@@ -99,7 +131,6 @@ class BaseRenderer:
         grid_half = 3.0
         edge      = 2.0 * grid_half / (grid_n - 1)
 
-        # Grid lines
         self._grid_verts = ti.Vector.field(3, dtype=ti.f32, shape=4 * grid_n)
         gi = 0
         for k in range(grid_n):
@@ -110,7 +141,6 @@ class BaseRenderer:
             self._grid_verts[gi + 3] = ti.Vector([ grid_half, 0.0,  v])
             gi += 4
 
-        # Checkerboard mesh
         num_cells      = (grid_n - 1) ** 2
         self._ground_v = ti.Vector.field(3, dtype=ti.f32, shape=num_cells * 4)
         self._ground_c = ti.Vector.field(3, dtype=ti.f32, shape=num_cells * 4)
@@ -142,7 +172,6 @@ class BaseRenderer:
 
     def _build_world_axes(self):
         s = self._axis_scale
-        # ENU x → Taichi [s,0,0]   ENU y → Taichi [0,0,-s]   ENU z → Taichi [0,s,0]
         tips = [[s, 0, 0], [0, 0, -s], [0, s, 0]]
         self._world_axis_verts = [
             ti.Vector.field(3, dtype=ti.f32, shape=2) for _ in range(3)
@@ -152,11 +181,19 @@ class BaseRenderer:
             self._world_axis_verts[i][1] = ti.Vector(tips[i])
 
     def _build_body_fields(self):
+        # Centre sphere
         self._body_pos = ti.Vector.field(3, dtype=ti.f32, shape=1)
-        # Preallocated once — avoids Taichi recompilation lag on each frame
+        # Body-frame axes: 3 axes x 2 verts, preallocated to avoid recompile lag
         self._body_axis_verts = [
             ti.Vector.field(3, dtype=ti.f32, shape=2) for _ in range(3)
         ]
+        # Arm lines: 4 arms x 2 verts, interleaved [origin, tip, ...]
+        self._arm_verts = ti.Vector.field(3, dtype=ti.f32, shape=8)
+        # Motor spheres at arm tips
+        self._motor_pos = ti.Vector.field(3, dtype=ti.f32, shape=4)
+
+        self._thrust_verts = ti.Vector.field(3, dtype=ti.f32, shape=8)   # 4 x [origin, tip]
+        # self._thrust_tips_pos = ti.Vector.field(3, dtype=ti.f32, shape=4) # cone base positions
 
     # ------------------------------------------------------------------
     # Per-frame field update
@@ -167,10 +204,26 @@ class BaseRenderer:
         origin = ti.Vector([cx, cy, cz])
         self._body_pos[0] = origin
 
+        # Body-frame axes
         for i in range(3):
             tx, ty, tz = self._body_axis_tips[frame, i]
             self._body_axis_verts[i][0] = origin
             self._body_axis_verts[i][1] = ti.Vector([tx, ty, tz])
+
+        # Arm lines + motor sphere positions
+        for i in range(4):
+            tx, ty, tz = self._arm_tips[frame, i]
+            tip = ti.Vector([tx, ty, tz])
+            self._arm_verts[i * 2]     = origin
+            self._arm_verts[i * 2 + 1] = tip
+            self._motor_pos[i]         = tip
+
+        # Thrust vectors
+        for i in range(4):
+            mx, my, mz = self._arm_tips[frame, i]
+            tx, ty, tz = self._thrust_tips[frame, i]
+            self._thrust_verts[i * 2]     = ti.Vector([mx, my, mz])
+            self._thrust_verts[i * 2 + 1] = ti.Vector([tx, ty, tz])
 
     # ------------------------------------------------------------------
     # Hook for subclasses
@@ -185,17 +238,11 @@ class BaseRenderer:
     # ------------------------------------------------------------------
 
     def run(self):
-        p_mid  = self._p_mid
-        extent = self._extent
-
         window = ti.ui.Window("Quadrotor Visualizer", self._win_size, vsync=True)
         canvas = window.get_canvas()
         scene  = window.get_scene()
         camera = ti.ui.Camera()
 
-        cam_dist = extent * 2.5
-        # camera.position(p_mid[0], p_mid[1], p_mid[2] + cam_dist)
-        # camera.lookat(float(p_mid[0]), float(p_mid[1]), float(p_mid[2]))
         camera.position(0, 3, 5)
         camera.lookat(0, 0, 0)
         camera.up(0, 1, 0)
@@ -229,24 +276,26 @@ class BaseRenderer:
 
             # --- lighting ---
             scene.ambient_light((0.3, 0.3, 0.3))
-            scene.point_light(
-                pos=(float(p_mid[0]), float(p_mid[1]) + extent * 2, float(p_mid[2])),
-                color=(1.0, 1.0, 1.0),
-            )
+            scene.point_light((0.0, -1.0, 0.0), color=(1.0, 1.0, 1.0))
+            scene.point_light((0.0, 10.0, 0.0), color=(1.0, 1.0, 1.0))
 
             # --- ground ---
             scene.mesh(self._ground_v, indices=self._ground_i, per_vertex_color=self._ground_c)
             scene.lines(self._grid_verts, width=1.0, color=(0.2, 0.2, 0.3))
 
-            # --- axes ---
+            # --- world / body axes ---
             if show_axes:
                 for i in range(3):
                     scene.lines(self._world_axis_verts[i], width=3.0, color=self._AXIS_COLORS[i])
                 for i in range(3):
                     scene.lines(self._body_axis_verts[i],  width=2.0, color=self._AXIS_COLORS[i])
 
-            # --- body sphere ---
-            scene.particles(self._body_pos, radius=self._arm_len * 0.15, color=(1.0, 0.4, 0.1))
+            # --- drone body ---
+            scene.lines(self._arm_verts,  width=3.0, color=(0.85, 0.85, 0.85))   # arms
+            scene.particles(self._body_pos,  radius=self._sphere_r, color=(0.2, 0.2, 0.2))  # centre
+            scene.particles(self._motor_pos, radius=self._motor_r,  color=(1.0, 0.4, 0.1))  # motors
+            scene.lines(self._thrust_verts,   width=2.0, color=(0.0, 0.8, 1.0))   # thrust lines
+            # scene.particles(self._thrust_tips_pos, radius=self._motor_r * 0.8, color=(0.0, 0.8, 1.0))  # cone proxy
 
             # --- subclass hook ---
             self._draw_extras(scene, frame)
@@ -271,3 +320,30 @@ class BaseRenderer:
                 else:
                     paused = True
                     print("Playback complete. Press R to restart.")
+
+
+# ---------------------------------------------------------------------------
+# PositionControlRenderer
+# ---------------------------------------------------------------------------
+
+class PositionControlRenderer(BaseRenderer):
+    """
+    Extends BaseRenderer with a static target-position sphere.
+
+    Extra args:
+        target_pos : (3,) ENU target position [m]
+    """
+
+    def __init__(self, target_pos: np.ndarray, **kwargs):
+        super().__init__(**kwargs)
+        self.target_pos = np.array(target_pos, dtype=np.float32)
+        self._target_ti = ti.Vector.field(3, dtype=ti.f32, shape=1)
+        self._update_target()
+
+    def _update_target(self):
+        t = enu_to_ti(self.target_pos[None])[0]
+        self._target_ti[0] = ti.Vector(t.tolist())
+
+    def _draw_extras(self, scene, frame: int):
+        self._update_target()
+        scene.particles(self._target_ti, radius=self._sphere_r * 0.6, color=(0.1, 0.9, 0.3))
