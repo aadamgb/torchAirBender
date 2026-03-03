@@ -12,19 +12,18 @@ from dynamics.quadrotor_dynamics import QuadrotorDynamics
 
 def reset(
         cfg: DictConfig,
+        states
         ):
     
     num_envs = cfg.num_envs
     device = cfg.device
 
     # ------------ Randomize initial position -----------
-    states = torch.zeros((num_envs, 13), device=device)
     states[:, :3] = torch.rand((num_envs, 3), device=device)
     states[:, 6] = 1.0  # seting quaternion w to 1 (FIXED)
 
     # ----------- Randomize target positon --------------
-    targets = torch.rand((num_envs, 3), device=device)
-    targets[:, 2] = 2.0
+    target = torch.rand((num_envs, 3), device=device)
 
     # ----------- Randomize drone params --------------
     # Generting key for reproducability
@@ -36,7 +35,7 @@ def reset(
         device=device,
         # generator=generator,
     )
-    return states, targets, params
+    return states, target, params
 
 def get_observation(
         states: Tensor, 
@@ -50,51 +49,30 @@ def get_observation(
     return torch.cat([p_error, rest], dim=-1)
 
 
-import torch
-from torch import Tensor
-
-
 def compute_loss(
-    states: Tensor,
+    states:  Tensor,
     targets: Tensor,
-    lambda_pos: float = 1.0,
-    lambda_rate: float = 0.1,
 ) -> Tensor:
     """
-    Position tracking loss + body rate regularization.
+    Mean position tracking error across all environments.
 
-    Total loss:
-        L = λ_pos * mean(||p_target - p||)
-          + λ_rate * mean(||omega||^2)
+    Returns a scalar — mean L2 distance to target over the batch.
 
     Args:
-        states      : (N, 13)
-        targets     : (N, 3)
-        lambda_pos  : weight for position error
-        lambda_rate : weight for body rate penalty
+        states  : (N, 13)
+        targets : (N, 3)
 
     Returns:
         loss : scalar tensor
     """
+    # Position error
+    p_error = targets - states[:, 0:3]
 
-    # -------------------------
-    # Position tracking term
-    # -------------------------
-    p_error = targets - states[:, 0:3]              # (N, 3)
-    pos_loss = torch.linalg.norm(p_error, dim=-1).mean()
+    # L2 norm over position dimension
+    distances = torch.linalg.norm(p_error, dim=-1)
 
-    # -------------------------
-    # Body rate penalty term
-    # -------------------------
-    omega = states[:, 10:13]                        # (N, 3)
-    rate_loss = (omega ** 2).sum(dim=-1).mean()
-
-    # -------------------------
-    # Total loss
-    # -------------------------
-    loss = lambda_pos * pos_loss + lambda_rate * rate_loss
-
-    return loss
+    # Mean over batch
+    return distances.mean()
 
 
 
@@ -105,14 +83,13 @@ def train(cfg: DictConfig):
     num_envs = cfg.num_envs
     episodes = cfg.episodes
     steps = cfg.steps
-    truncation = cfg.truncation
+    truncation = 100
     
     print(f"\n{'='*75}")
     print(f"  Position Control Training")
     print(f"  Envs: {cfg.num_envs}  |  "
           f"  Episodes     : {episodes}  |  "
           f"  Steps: {cfg.steps}  |  "
-        f"  Horizon: {cfg.truncation}"
         )
     print(f"{'='*75}\n")
 
@@ -120,8 +97,8 @@ def train(cfg: DictConfig):
     targets = torch.rand((num_envs, 3), device=device)
     states = torch.zeros((num_envs, 13), device=device)
 
-    # Pre-allocate truncation loss buffer (replace the list approach)
-    truncation_losses = torch.empty(truncation, device=device)  # for logging only
+    # Pre-allocate horizon loss buffer (replace the list approach)
+    horizon_losses = torch.empty(truncation, device=device)
     # Store the trajectory of env 0 for visualization (states + actions)
     traj_env0 = torch.empty((steps, 17), device=device)  # 13 state + 4 actions
 
@@ -140,7 +117,7 @@ def train(cfg: DictConfig):
     # Main Simulation Loop
     #------------------------------------------
     for ep in range(episodes):
-        states, targets, randomized_params = reset(cfg)
+        states, targets, randomized_params = reset(cfg, states)
         quadrotor.set_parameters(randomized_params)
 
         ep_loss = 0.0
@@ -148,39 +125,33 @@ def train(cfg: DictConfig):
 
         for t in range(steps):
 
+            # --- Truncation boundary: detach state to cut the compute graph ---
             if t % truncation == 0:
                 states = states.detach()
-                window_start = t
-                window_loss_sum = torch.zeros(1, device=device)  # live differentiable accumulator
-
+                horizon_start = t  # track where the window began
+            
             obs = get_observation(states, targets)
-            actions = policy(obs) * 2.5
+            actions = policy(obs) * 8.0
             states = quadrotor.step(state=states, action=actions)
 
-            step_loss = compute_loss(states, targets)
+            # Accumulate per-step loss within the window
+            horizon_losses[t % truncation] = compute_loss(states, targets).detach()
 
-            # Detached copy for logging/inspection
-            truncation_losses[t % truncation] = step_loss.detach()
-
-            # Differentiable accumulator for backward
-            window_loss_sum = window_loss_sum + step_loss
-
+            # Save env 0 last episode trajectory for visualization
             if ep == episodes - 1:
-                traj_env0[t] = torch.cat([
-                    states[0].detach(),
-                    actions[0].detach()
-                ], dim=0)
+                traj_env0[t] = torch.cat([states[0].detach(), actions[0].detach()], dim=0) 
 
+            # --- Update at end of each truncation window ---
             if (t + 1) % truncation == 0 or (t + 1) == steps:
-                window_len = (t + 1) - window_start
-                loss = window_loss_sum / window_len
+                horizon_len = (t + 1) - horizon_start
+                loss = horizon_losses[:horizon_len].mean()
 
                 optimizer.zero_grad()
                 loss.backward()
-                torch.nn.utils.clip_grad_norm_(policy.parameters(), max_norm=1.0)
+                # torch.nn.utils.clip_grad_norm_(policy.parameters(), max_norm=1.0)
                 optimizer.step()
 
-                ep_loss += truncation_losses[:window_len].mean().item()
+                ep_loss += loss.item()
                 num_updates += 1
 
         avg_ep_loss = ep_loss / num_updates

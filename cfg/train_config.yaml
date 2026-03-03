@@ -2,6 +2,7 @@ defaults:
   - env: hover
   - dynamics: quadrotor
   - renderer: replay
+  - controller: proportional_derivative
   - _self_
 
 
@@ -9,6 +10,9 @@ defaults:
 device: "cuda"
 dt: 0.01
 
-num_envs: 2
-episodes: 100
+num_envs: 2048
+episodes: 50
 steps: 500
+truncation: 10
+
+lr: 1e-3

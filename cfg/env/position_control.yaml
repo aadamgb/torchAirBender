@@ -1,3 +1,4 @@
 name: position_control
 
 
+nn: [13, 128, 128, 4]

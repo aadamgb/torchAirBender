@@ -102,16 +102,20 @@ class BaseRenderer:
         self._arm_tips = enu_to_ti(arm_tips_enu)       # (T, 4, 3) Taichi
 
         # Thrust vector
-        thrust_scale = 0.1
+        thrust_scale = 0.05
         body_z = np.array([0, 0, 1], dtype=np.float32)
 
         thrust_tips_enu = np.zeros((self._T, 4, 3), dtype=np.float32)
+        amplify = 1000.0   # tune this — higher = more exaggerated differences
+        amplify = 10.0   # tune this — higher = more exaggerated differences
+
         for t in range(self._T):
             R = quat_to_rotmat(self._traj[t, 6:10])
-            world_z = R @ body_z                          # (3,) thrust direction in world ENU
-            max_thrust = actions[t].max() + 1e-6          # normalise relative to max motor
+            world_z = R @ body_z
+            mean_thrust = actions[t].mean()
             for i in range(4):
-                magnitude = actions[t, i] / max_thrust    # 0..1
+                deviation = (actions[t, i] - mean_thrust) / (mean_thrust + 1e-6)  # relative diff from mean
+                magnitude = max(0.0, 1.0 + deviation * amplify)                    # 1.0 = hover length, clamp to >= 0
                 thrust_tips_enu[t, i] = arm_tips_enu[t, i] + world_z * magnitude * thrust_scale
 
         self._thrust_tips = enu_to_ti(thrust_tips_enu)    # (T, 4, 3)
@@ -238,7 +242,7 @@ class BaseRenderer:
     # ------------------------------------------------------------------
 
     def run(self):
-        window = ti.ui.Window("Quadrotor Visualizer", self._win_size, vsync=True)
+        window = ti.ui.Window("Pon DE rePlaY!", self._win_size, vsync=True)
         canvas = window.get_canvas()
         scene  = window.get_scene()
         camera = ti.ui.Camera()
@@ -346,4 +350,4 @@ class PositionControlRenderer(BaseRenderer):
 
     def _draw_extras(self, scene, frame: int):
         self._update_target()
-        scene.particles(self._target_ti, radius=self._sphere_r * 0.6, color=(0.1, 0.9, 0.3))
+        scene.particles(self._target_ti, radius=self._sphere_r , color=(0.1, 0.9, 0.3))
