@@ -24,6 +24,39 @@ def quat_to_rotmat(q: np.ndarray) -> np.ndarray:
     ], dtype=np.float32)
 
 
+def build_triangle_at_tip(
+    tip: np.ndarray,        # (3,) tip position in Taichi coords
+    thrust_dir: np.ndarray, # (3,) normalised thrust direction in Taichi coords
+    half_base: float,       # half-width of the base (lateral spread)
+    height: float,          # full height along thrust direction
+    angle: float = 0.0,     # rotation around thrust_dir in radians
+) -> np.ndarray:
+    """
+    Returns vertices for one isoceles triangle centred at `tip`.
+    - Base edge is parallel to the xy body plane (perpendicular to thrust_dir).
+    - Apex points along +thrust_dir.
+    - `angle` rotates the lateral axis around thrust_dir for pinwheel placement.
+
+    Returns shape (3, 3): [vertex_index, xyz]
+    """
+    d = thrust_dir / (np.linalg.norm(thrust_dir) + 1e-12)
+
+    # Base lateral axis perpendicular to d, then rotated by `angle` around d
+    ref = np.array([1.0, 0.0, 0.0], dtype=np.float32)
+    if abs(np.dot(d, ref)) > 0.9:
+        ref = np.array([0.0, 1.0, 0.0], dtype=np.float32)
+    u0 = np.cross(d, ref);  u0 /= np.linalg.norm(u0)
+    v0 = np.cross(d, u0);   v0 /= np.linalg.norm(v0)
+    # Rodrigues rotation of u0 around d by `angle`
+    u = math.cos(angle) * u0 + math.sin(angle) * v0
+
+    apex   = tip + (2.0/3.0) * height * d
+    base_l = tip - (1.0/3.0) * height * d - half_base * u
+    base_r = tip - (1.0/3.0) * height * d + half_base * u
+
+    return np.array([apex, base_l, base_r], dtype=np.float32)
+
+
 # ---------------------------------------------------------------------------
 # BaseRenderer
 # ---------------------------------------------------------------------------
@@ -35,6 +68,7 @@ class BaseRenderer:
       - World-frame axes  (X=red, Y=green, Z=blue)
       - Quadrotor body: two crossing arm lines + centre sphere + 4 motor spheres
       - Body-frame axes
+      - Thrust vectors with equilateral triangle arrowheads at tips
 
     Controls:
         LMB + drag  : orbit camera
@@ -120,6 +154,38 @@ class BaseRenderer:
 
         self._thrust_tips = enu_to_ti(thrust_tips_enu)    # (T, 4, 3)
 
+        # ---------------------------------------------------------------
+        # Precompute arrowhead triangle vertices in Taichi coords
+        # Shape: (T, 4 motors, 4 arrows, 3 verts, 3 xyz)
+        # 4 arrows evenly spaced (90° apart) around the thrust axis per motor
+        # ---------------------------------------------------------------
+        half_base  = arm_length * 0.08   # half-width of base
+        tri_height = arm_length * 0.22   # height — taller than base
+        n_arrows   = 4
+        arrow_angles = [k * math.pi / 4 for k in range(n_arrows)]  # 0, 45, 90, 135 deg
+        self._arrow_tris = np.zeros((self._T, 4, n_arrows, 3, 3), dtype=np.float32)
+
+        for t in range(self._T):
+            R = quat_to_rotmat(self._traj[t, 6:10])
+            world_z_enu = R @ body_z                         # (3,) ENU
+            # Convert direction vector to Taichi coords (swap axes, negate z)
+            world_z_ti = np.array([
+                world_z_enu[0],
+                world_z_enu[2],
+               -world_z_enu[1],
+            ], dtype=np.float32)
+
+            for i in range(4):
+                tip_ti = self._thrust_tips[t, i]             # (3,) Taichi
+                for k, angle in enumerate(arrow_angles):
+                    self._arrow_tris[t, i, k] = build_triangle_at_tip(
+                        tip=tip_ti,
+                        thrust_dir=world_z_ti,
+                        half_base=half_base,
+                        height=tri_height,
+                        angle=angle,
+                    )                                        # (3, 3)
+
         ti.init(arch=ti.cpu)
 
         self._build_ground()
@@ -197,7 +263,16 @@ class BaseRenderer:
         self._motor_pos = ti.Vector.field(3, dtype=ti.f32, shape=4)
 
         self._thrust_verts = ti.Vector.field(3, dtype=ti.f32, shape=8)   # 4 x [origin, tip]
-        # self._thrust_tips_pos = ti.Vector.field(3, dtype=ti.f32, shape=4) # cone base positions
+
+        # Arrowhead triangles: 4 motors * 4 arrows * 3 verts = 48 verts total
+        self._arrow_v = ti.Vector.field(3, dtype=ti.f32, shape=48)   # vertex positions
+        self._arrow_i = ti.field(dtype=ti.i32,           shape=48)   # index buffer
+        # Fill index buffer once — each triangle is 3 consecutive verts
+        for tri_id in range(16):   # 4 motors * 4 arrows
+            base = tri_id * 3
+            self._arrow_i[base + 0] = base
+            self._arrow_i[base + 1] = base + 1
+            self._arrow_i[base + 2] = base + 2
 
     # ------------------------------------------------------------------
     # Per-frame field update
@@ -228,6 +303,14 @@ class BaseRenderer:
             tx, ty, tz = self._thrust_tips[frame, i]
             self._thrust_verts[i * 2]     = ti.Vector([mx, my, mz])
             self._thrust_verts[i * 2 + 1] = ti.Vector([tx, ty, tz])
+
+        # Arrowhead triangles at each thrust tip (4 arrows per motor)
+        for i in range(4):
+            for k in range(4):
+                base = (i * 4 + k) * 3
+                for v in range(3):
+                    x, y, z = self._arrow_tris[frame, i, k, v]
+                    self._arrow_v[base + v] = ti.Vector([x, y, z])
 
     # ------------------------------------------------------------------
     # Hook for subclasses
@@ -298,8 +381,10 @@ class BaseRenderer:
             scene.lines(self._arm_verts,  width=3.0, color=(0.85, 0.85, 0.85))   # arms
             scene.particles(self._body_pos,  radius=self._sphere_r, color=(0.2, 0.2, 0.2))  # centre
             scene.particles(self._motor_pos, radius=self._motor_r,  color=(1.0, 0.4, 0.1))  # motors
-            scene.lines(self._thrust_verts,   width=2.0, color=(0.0, 0.8, 1.0))   # thrust lines
-            # scene.particles(self._thrust_tips_pos, radius=self._motor_r * 0.8, color=(0.0, 0.8, 1.0))  # cone proxy
+            scene.lines(self._thrust_verts,   width=5.0, color=(0.0, 0.8, 1.0))   # thrust lines
+
+            # --- thrust arrowhead triangles (two perpendicular equilateral triangles per tip) ---
+            scene.mesh(self._arrow_v, indices=self._arrow_i, color=(0.0, 0.8, 1.0))
 
             # --- subclass hook ---
             self._draw_extras(scene, frame)

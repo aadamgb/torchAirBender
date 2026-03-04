@@ -1,3 +1,4 @@
+import os
 import torch
 from torch import Tensor
 from torch import nn
@@ -8,6 +9,7 @@ from utils.randomize import randomize_parameters
 from utils.replay import PositionControlRenderer
 
 from dynamics.quadrotor_dynamics import QuadrotorDynamics
+# from controller.srt_controller import SRTController
 
 
 def reset(
@@ -88,7 +90,7 @@ def compute_loss(
     states: Tensor,
     targets: Tensor,
     mask: Tensor | None = None,  # (N,) bool — True = include in loss
-    lambda_pos: float = 0.75,
+    lambda_pos: float = 2.0,
     lambda_rate: float = 0.1,
     lambda_vel: float = 0.25,
 ) -> Tensor:
@@ -98,7 +100,8 @@ def compute_loss(
     """
 
     if mask is not None and not mask.any():
-        return torch.zeros(1, device=states.device, requires_grad=True)
+        # return torch.zeros(1, device=states.device, requires_grad=True)
+        return states.sum() * 0.0
 
     s = states[mask] if mask is not None else states
     t = targets[mask] if mask is not None else targets
@@ -128,6 +131,11 @@ def compute_loss(
 
 
 def train(cfg: DictConfig):
+    # Path for saving the best and last policies
+    output_dir = "/home/adame/torchAirBender/outputs/policies"
+    os.makedirs(output_dir, exist_ok=True)
+
+    # Simulation params
     dt = cfg.dt
     device = cfg.device
     num_envs = cfg.num_envs
@@ -167,6 +175,7 @@ def train(cfg: DictConfig):
     #-------------------------------------------
     # Main Simulation Loop
     #------------------------------------------
+    best_loss = float("inf")
     for ep in range(episodes):
         states, targets, randomized_params = reset(cfg)
         quadrotor.set_parameters(randomized_params)
@@ -183,12 +192,35 @@ def train(cfg: DictConfig):
 
             obs = get_observation(states, targets)
             actions = policy(obs) * 2.0
+            from controller.srt_controller import SRTController
+
+            controller = SRTController(cfg)
+
+            # in the loop:
+            raw     = policy(obs)                  # (N, 4) in (0, 1)
+            actions = controller(raw)              # (N, 4) in (0, max_thrust)
+            states  = quadrotor.step(state=states, action=actions)
+            
+            # print(actions[0]) if t == steps -1 else None
             states = quadrotor.step(state=states, action=actions)
 
             # --- termination: envs too far from target ---
-            distances  = torch.linalg.norm(targets - states[:, 0:3], dim=-1)  # (N,)
-            terminated = distances > cfg.env.target_boundary                   # (N,) bool
-            alive      = ~terminated                                            # (N,) bool
+            distances  = torch.linalg.norm(targets - states[:, 0:3], dim=-1)     # (N,)
+            terminated = distances > cfg.env.target_boundary                     # (N,) bool
+
+            # pos = states[:, 0:3]                          # (N, 3)
+            # half = cfg.env.target_boundary / 2.0
+
+            # out_of_bounds = (
+            #     (pos[:, 0].abs() > half) |                # x
+            #     (pos[:, 1].abs() > half) |                # y
+            #     (pos[:, 2] < 0) |                         # z below ground
+            #     (pos[:, 2] > cfg.env.target_boundary)     # z above ceiling
+            # )                                             # (N,) bool
+
+            # terminated = out_of_bounds
+
+            alive      = ~terminated                                             # (N,) bool
 
             step_loss = compute_loss(states, targets, mask=alive)
 
@@ -210,7 +242,7 @@ def train(cfg: DictConfig):
 
                 optimizer.zero_grad()
                 loss.backward()
-                torch.nn.utils.clip_grad_norm_(policy.parameters(), max_norm=1.0)
+                # torch.nn.utils.clip_grad_norm_(policy.parameters(), max_norm=1.0)
                 optimizer.step()
 
                 ep_loss += truncation_losses[:window_len].mean().item()
@@ -219,19 +251,38 @@ def train(cfg: DictConfig):
             # --- soft reset terminated envs (detached, after backward) ---
             states, targets = reset_terminated(states, targets, terminated, cfg)
 
+            # # Adding termination penalty, maybe remove idk tbh
+            # if terminated.any():
+            #     term_loss = cfg.env.termination_penalty * terminated.float().mean()
+            #     step_loss = step_loss + term_loss
+
         avg_ep_loss = ep_loss / num_updates
-        # if (ep + 1) % 10 == 0: 
-        print(f"  Episode {ep+1:>4}/{episodes}  |  Avg Loss: {avg_ep_loss:.4f}")
+         
+        print(f"  Episode {ep+1:>4}/{episodes}  |  Avg Loss: {avg_ep_loss:.4f}") if (ep + 1) % 10 == 0 else None
+
+        # Save best policy
+        if avg_ep_loss < best_loss:
+            best_loss = avg_ep_loss
+            torch.save(policy.state_dict(), os.path.join(output_dir, "position_control_best.pt"))
+            # print(f"    → New best policy saved (loss = {best_loss:.4f})")
+
+
+    # Save the final policy
+    torch.save(policy.state_dict(), os.path.join(output_dir, f"position_control_final.pt"))
 
 
     # Replay the trajectory
-    renderer = PositionControlRenderer(
-        target_pos=targets[0].detach().cpu().numpy(),
-        boundary=cfg.env.target_boundary,
-        trajectory=traj_env0.detach().cpu().numpy(),  # (T, 13)
-        arm_length=float(randomized_params.arm_length[0].cpu()),
-        arm_angle=float(randomized_params.arm_angle[0].cpu()),
-        mass=float(randomized_params.mass[0].cpu()),
-        dt=dt,
-    )
-    renderer.run()
+    # renderer = PositionControlRenderer(
+    #     target_pos=targets[0].detach().cpu().numpy(),
+    #     boundary=cfg.env.target_boundary,
+    #     trajectory=traj_env0.detach().cpu().numpy(),  # (T, 13)
+    #     arm_length=float(randomized_params.arm_length[0].cpu()),
+    #     arm_angle=float(randomized_params.arm_angle[0].cpu()),
+    #     mass=float(randomized_params.mass[0].cpu()),
+    #     dt=dt,
+    # )
+    # renderer.run()
+
+
+    traj = traj_env0.detach().cpu().numpy()
+    print(traj[:, 13:17].max())

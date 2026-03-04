@@ -11,7 +11,7 @@ device: "cuda"
 dt: 0.01
 
 num_envs: 2048
-episodes: 40
+episodes: 50
 steps: 1000
 truncation: 100
 

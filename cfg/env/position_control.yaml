@@ -4,4 +4,5 @@ name: position_control
 nn: [13, 128, 128, 4]
 
 
-target_boundary: 3
+target_boundary: 3.0
+termination_penalty: 10.0
