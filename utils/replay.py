@@ -337,12 +337,34 @@ class PositionControlRenderer(BaseRenderer):
     Extra args:
         target_pos : (3,) ENU target position [m]
     """
-
-    def __init__(self, target_pos: np.ndarray, **kwargs):
+    def __init__(self, target_pos: np.ndarray, boundary: float, **kwargs):
         super().__init__(**kwargs)
         self.target_pos = np.array(target_pos, dtype=np.float32)
         self._target_ti = ti.Vector.field(3, dtype=ti.f32, shape=1)
         self._update_target()
+
+        # Build boundary cube edges (12 edges x 2 verts = 24 verts)
+        h = boundary / 2.0
+        # 8 corners in ENU: x in [-h,h], y in [-h,h], z in [0, boundary]
+        corners_enu = np.array([
+            [-h, -h, 0],        [-h, -h, boundary],
+            [ h, -h, 0],        [ h, -h, boundary],
+            [-h,  h, 0],        [-h,  h, boundary],
+            [ h,  h, 0],        [ h,  h, boundary],
+        ], dtype=np.float32)
+
+        # 12 edges as pairs of corner indices
+        edge_indices = [
+            (0,1),(2,3),(4,5),(6,7),   # 4 vertical edges
+            (0,2),(1,3),(4,6),(5,7),   # 4 bottom + top x-edges
+            (0,4),(1,5),(2,6),(3,7),   # 4 bottom + top y-edges
+        ]
+
+        corners_ti = enu_to_ti(corners_enu)
+        self._cube_verts = ti.Vector.field(3, dtype=ti.f32, shape=len(edge_indices) * 2)
+        for k, (a, b) in enumerate(edge_indices):
+            self._cube_verts[k * 2]     = ti.Vector(corners_ti[a].tolist())
+            self._cube_verts[k * 2 + 1] = ti.Vector(corners_ti[b].tolist())
 
     def _update_target(self):
         t = enu_to_ti(self.target_pos[None])[0]
@@ -350,4 +372,5 @@ class PositionControlRenderer(BaseRenderer):
 
     def _draw_extras(self, scene, frame: int):
         self._update_target()
-        scene.particles(self._target_ti, radius=self._sphere_r , color=(0.1, 0.9, 0.3))
+        scene.particles(self._target_ti, radius=self._sphere_r * 2.0, color=(0.1, 0.9, 0.3))
+        scene.lines(self._cube_verts, width=3.0, color=(1.0, 0.1, 0.1))  # red cube edges

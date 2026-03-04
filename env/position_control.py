@@ -23,20 +23,54 @@ def reset(
     states[:, 6] = 1.0  # seting quaternion w to 1 (FIXED)
 
     # ----------- Randomize target positon --------------
-    targets = torch.rand((num_envs, 3), device=device)
-    targets[:, 2] = 2.0
+    half = cfg.env.target_boundary / 2.0  # half-width of the cube
+
+    targets = torch.rand((num_envs, 3), device=device)   # [0, 1)
+    targets[:, 0] = targets[:, 0] * cfg.env.target_boundary - half  # x: [-half, half)
+    targets[:, 1] = targets[:, 1] * cfg.env.target_boundary - half  # y: [-half, half)
+    targets[:, 2] = targets[:, 2] * cfg.env.target_boundary         # z: [0, boundary)
 
     # ----------- Randomize drone params --------------
-    # Generting key for reproducability
-    # generator = torch.Generator(device=device)
-    # generator.manual_seed(42)
     params = randomize_parameters(
         cfg=cfg.dynamics,
         num_envs=num_envs,
         device=device,
-        # generator=generator,
     )
     return states, targets, params
+
+
+def reset_terminated(
+        states: Tensor,
+        targets: Tensor,
+        terminated: Tensor,  # (N,) bool
+        cfg: DictConfig,
+) -> tuple[Tensor, Tensor]:
+    """Reset only the environments that terminated."""
+    if not terminated.any():
+        return states, targets
+
+    idx = terminated.nonzero(as_tuple=True)[0]
+    n   = idx.numel()
+    device = states.device
+
+    half = cfg.env.target_boundary / 2.0
+
+    new_states        = torch.zeros((n, 13), device=device)
+    new_states[:, :3] = torch.rand((n, 3), device=device)
+    new_states[:, 6]  = 1.0
+
+    new_targets       = torch.rand((n, 3), device=device)
+    new_targets[:, 0] = new_targets[:, 0] * cfg.env.target_boundary - half
+    new_targets[:, 1] = new_targets[:, 1] * cfg.env.target_boundary - half
+    new_targets[:, 2] = new_targets[:, 2] * cfg.env.target_boundary
+
+    states[idx]  = new_states
+    targets[idx] = new_targets
+
+    # print(f"Env {idx} is terminated!!")
+
+    return states, targets
+
 
 def get_observation(
         states: Tensor, 
@@ -50,52 +84,46 @@ def get_observation(
     return torch.cat([p_error, rest], dim=-1)
 
 
-import torch
-from torch import Tensor
-
-
 def compute_loss(
     states: Tensor,
     targets: Tensor,
-    lambda_pos: float = 1.0,
+    mask: Tensor | None = None,  # (N,) bool — True = include in loss
+    lambda_pos: float = 0.75,
     lambda_rate: float = 0.1,
+    lambda_vel: float = 0.25,
 ) -> Tensor:
     """
-    Position tracking loss + body rate regularization.
-
-    Total loss:
-        L = λ_pos * mean(||p_target - p||)
-          + λ_rate * mean(||omega||^2)
-
-    Args:
-        states      : (N, 13)
-        targets     : (N, 3)
-        lambda_pos  : weight for position error
-        lambda_rate : weight for body rate penalty
-
-    Returns:
-        loss : scalar tensor
+    Position tracking + distance-weighted velocity damping + body rate penalty.
+    Terminated envs are excluded via mask.
     """
 
-    # -------------------------
-    # Position tracking term
-    # -------------------------
-    p_error = targets - states[:, 0:3]              # (N, 3)
-    pos_loss = torch.linalg.norm(p_error, dim=-1).mean()
+    if mask is not None and not mask.any():
+        return torch.zeros(1, device=states.device, requires_grad=True)
 
-    # -------------------------
-    # Body rate penalty term
-    # -------------------------
-    omega = states[:, 10:13]                        # (N, 3)
-    rate_loss = (omega ** 2).sum(dim=-1).mean()
+    s = states[mask] if mask is not None else states
+    t = targets[mask] if mask is not None else targets
 
-    # -------------------------
+    # --------------------------------
+    # Position term
+    # --------------------------------
+    p_error = t - s[:, 0:3]                         # (N, 3)
+    distances = torch.linalg.norm(p_error, dim=-1)  # (N,)
+    pos_loss = distances.mean()
+
+    # --------------------------------
+    # Velocity term
+    # --------------------------------
+    vel_loss = (s[:, 3:6] ** 2).sum(dim=-1).mean()
+
+    # --------------------------------
+    # Body rate penalty
+    # --------------------------------
+    rate_loss = (s[:, 10:13] ** 2).sum(dim=-1).mean()
+
+    # --------------------------------
     # Total loss
-    # -------------------------
-    loss = lambda_pos * pos_loss + lambda_rate * rate_loss
-
-    return loss
-
+    # --------------------------------
+    return lambda_pos * pos_loss + lambda_vel * vel_loss + lambda_rate * rate_loss
 
 
 
@@ -154,10 +182,15 @@ def train(cfg: DictConfig):
                 window_loss_sum = torch.zeros(1, device=device)  # live differentiable accumulator
 
             obs = get_observation(states, targets)
-            actions = policy(obs) * 2.5
+            actions = policy(obs) * 2.0
             states = quadrotor.step(state=states, action=actions)
 
-            step_loss = compute_loss(states, targets)
+            # --- termination: envs too far from target ---
+            distances  = torch.linalg.norm(targets - states[:, 0:3], dim=-1)  # (N,)
+            terminated = distances > cfg.env.target_boundary                   # (N,) bool
+            alive      = ~terminated                                            # (N,) bool
+
+            step_loss = compute_loss(states, targets, mask=alive)
 
             # Detached copy for logging/inspection
             truncation_losses[t % truncation] = step_loss.detach()
@@ -183,13 +216,18 @@ def train(cfg: DictConfig):
                 ep_loss += truncation_losses[:window_len].mean().item()
                 num_updates += 1
 
+            # --- soft reset terminated envs (detached, after backward) ---
+            states, targets = reset_terminated(states, targets, terminated, cfg)
+
         avg_ep_loss = ep_loss / num_updates
+        # if (ep + 1) % 10 == 0: 
         print(f"  Episode {ep+1:>4}/{episodes}  |  Avg Loss: {avg_ep_loss:.4f}")
 
 
     # Replay the trajectory
     renderer = PositionControlRenderer(
         target_pos=targets[0].detach().cpu().numpy(),
+        boundary=cfg.env.target_boundary,
         trajectory=traj_env0.detach().cpu().numpy(),  # (T, 13)
         arm_length=float(randomized_params.arm_length[0].cpu()),
         arm_angle=float(randomized_params.arm_angle[0].cpu()),
