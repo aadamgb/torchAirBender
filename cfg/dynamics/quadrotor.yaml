@@ -1,7 +1,7 @@
 name: quadrotor
 
 # === Domain Randomization ===
-dr : True
+# dr : True
 # ============================
 
 # Scale factor — drives correlated parameter sampling across envs

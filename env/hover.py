@@ -41,20 +41,21 @@ def train(cfg: DictConfig):
     actions = srt_hover.unsqueeze(1).expand(-1, 4)
 
     # Store the trajectory
-    traj_env0 = torch.empty((steps, 13), device=device)
+    traj_env0 = torch.empty((steps, 17), device=device)
 
     #-------------------------------------------
     # Main Simulation Loop
     #------------------------------------------
     for t in range(steps):
         states = quadrotor.step(state=states, action=actions)
-        traj_env0[t] = states[0]   # store only first env
+        traj_env0[t] = torch.cat([states[0], actions[0]], dim=0)   # store only first env
 
 
     # Replay the trajectory
     renderer = BaseRenderer(
         trajectory=traj_env0.detach().cpu().numpy(),  # (T, 13)
         arm_length=float(randomized_params.arm_length[0].cpu()),
+        arm_angle=float(randomized_params.arm_angle[0].cpu()),
         mass=float(randomized_params.mass[0].cpu()),
         dt=dt,
     )
