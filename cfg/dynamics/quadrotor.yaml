@@ -66,4 +66,5 @@ km:
 
 
 
-max_thrust: 2.0
+max_thrust: 2.5   #per rotor
+# max_thrust: 2.0

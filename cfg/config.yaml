@@ -11,10 +11,12 @@ device: "cuda"
 dt: 0.01
 
 
-num_envs: 1024
-episodes: 30
+num_envs: 2048
+episodes: 100
 steps: 800
 
 truncation: 50
 
+
+# test_traj: "/home/adame/torchAirBender/miscellaneous/trajectories/togt_traj.csv"
 

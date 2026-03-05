@@ -3,14 +3,11 @@ import time
 import torch
 from torch import Tensor
 from torch import nn
-
-from omegaconf import DictConfig, OmegaConf             # params loading
-import pandas as pd                                     # for trajectory loading
+from omegaconf import DictConfig, OmegaConf
 
 from utils.nn import MLP 
 from utils.randomize import QuadrotorParams, randomize_parameters
 from utils.replay import TrajectoryTrackingRenderer
-from utils.math import quat_to_rotmat
 
 from dynamics.quadrotor_dynamics import QuadrotorDynamics
 from controller.srt_controller import SRTController
@@ -71,38 +68,6 @@ def get_target(
 
     return pos, vel, acc
 
-def acc_to_quat(acc_ref: Tensor, g: float = 9.81) -> Tensor:
-    """
-    Computes desired quaternion from reference acceleration.
-    Desired thrust direction = acc_ref + gravity_vector.
-
-    Args:
-        acc_ref : (N, 3)
-    Returns:
-        q_des   : (N, 4)  [w, x, y, z]
-    """
-    gravity = torch.tensor([0.0, 0.0, g], device=acc_ref.device)   # acceleration compensation
-    thrust_dir = acc_ref + gravity                                     # (N, 3)
-    thrust_dir = torch.nn.functional.normalize(thrust_dir, dim=-1)    # (N, 3)
-
-    # Body z-axis in world frame should align with thrust_dir
-    # Rotation from world z [0,0,1] to thrust_dir
-    world_z = torch.zeros_like(thrust_dir)
-    world_z[:, 2] = 1.0
-
-    # Axis of rotation = cross(world_z, thrust_dir)
-    axis = torch.linalg.cross(world_z, thrust_dir)                    # (N, 3)
-    # Angle: cos(theta) = dot(world_z, thrust_dir)
-    dot  = (world_z * thrust_dir).sum(dim=-1, keepdim=True)           # (N, 1)
-
-    # Quaternion: w = cos(theta/2), xyz = sin(theta/2) * axis_normalized
-    # Using half-angle: w = sqrt((1 + cos)/2), |xyz| = sqrt((1 - cos)/2)
-    w   = torch.sqrt(torch.clamp((1.0 + dot) / 2.0, min=1e-6))       # (N, 1)
-    xyz = torch.nn.functional.normalize(axis, dim=-1) * torch.sqrt(
-        torch.clamp((1.0 - dot) / 2.0, min=0.0)
-    )                                                                  # (N, 3)
-
-    return torch.cat([w, xyz], dim=-1)                                 # (N, 4)
 
 def reset(
         cfg: DictConfig,
@@ -112,13 +77,12 @@ def reset(
     num_envs = cfg.num_envs
     device   = cfg.device
 
-    pos0, vel0, acc0 = get_target(0.0, traj_params)                   # (N, 3) each
+    pos0, vel0, _ = get_target(0.0, traj_params)                   # (N, 3) each
 
     states = torch.zeros((num_envs, 13), device=device)
     states[:, 0:3]  = pos0.detach()
     states[:, 3:6]  = vel0.detach()                                # match target velocity
-    states[:, 6:10] = acc_to_quat(acc0.detach())   
-    # states[:, 6]    = 1.0                                          # quaternion w = 1
+    states[:, 6]    = 1.0                                          # quaternion w = 1
 
     params = randomize_parameters(cfg.dynamics, num_envs, device)
 
@@ -130,7 +94,6 @@ def reset_terminated(
         terminated: Tensor,     # (N,) bool
         pos_ref: Tensor,        # (N, 3) current reference position
         vel_ref: Tensor,        # (N, 3) current reference velocity
-        acc_ref: Tensor,        # (N, 3) current reference velocity
 ) -> Tensor:
     """Snap terminated envs back to current reference position and velocity."""
     if not terminated.any():
@@ -140,9 +103,8 @@ def reset_terminated(
 
     states[idx, 0:3]  = pos_ref[idx].detach()
     states[idx, 3:6]  = vel_ref[idx].detach()                     # match target velocity
-    states[idx, 6:10] = acc_to_quat(acc_ref[idx].detach())
-    states[idx, 10:13] = 0.0
-    # states[idx, 6]    = 1.0                                        # quaternion w = 1
+    states[idx, 6:13] = 0.0
+    states[idx, 6]    = 1.0                                        # quaternion w = 1
 
     return states
 
@@ -167,7 +129,6 @@ def compute_loss(
     states: Tensor,
     pos_ref: Tensor,
     vel_ref: Tensor,
-    acc_ref: Tensor,
     weights: DictConfig,
     mask: Tensor | None = None,
 ) -> Tensor:
@@ -177,23 +138,12 @@ def compute_loss(
     s = states[mask] if mask is not None else states
     p = pos_ref[mask] if mask is not None else pos_ref
     v = vel_ref[mask] if mask is not None else vel_ref
-    a = acc_ref[mask] if mask is not None else acc_ref
 
     pos_loss  = torch.linalg.norm(p - s[:, 0:3], dim=-1).mean()
     vel_loss  = torch.linalg.norm(v - s[:, 3:6], dim=-1).mean()  
     rate_loss = (s[:, 10:13] ** 2).sum(dim=-1).mean()
 
-    # Orientation loss: angle between actual body-z and desired thrust direction
-    gravity     = torch.tensor([0.0, 0.0, -9.81], device=s.device)
-    thrust_dir  = torch.nn.functional.normalize(a + gravity, dim=-1)  # (N, 3)
-    R           = quat_to_rotmat(s[:, 6:10])                          # (N, 3, 3)
-    body_z      = R[:, :, 2]                                          # (N, 3) — third column
-    cos_angle   = (body_z * thrust_dir).sum(dim=-1).clamp(-1, 1)      # (N,)
-    att_loss    = (1.0 - cos_angle).mean()                            # 0 when aligned, 2 when opposite
-
-
-    return (weights.pos * pos_loss + weights.vel * vel_loss +  
-            weights.att * att_loss + weights.body_rates * rate_loss)
+    return weights.pos * pos_loss + weights.vel * vel_loss + weights.body_rates * rate_loss
 
 
 
@@ -260,7 +210,7 @@ def train(cfg: DictConfig):
             too_far = dist > cfg.env.max_dist_to_target
             alive = ~too_far
 
-            step_loss = compute_loss(states, pos_ref, vel_ref, acc_ref, cfg.env.loss_weights, mask=alive)
+            step_loss = compute_loss(states, pos_ref, vel_ref, cfg.env.loss_weights, mask=alive)
             truncation_losses[t % truncation] = step_loss.detach()
             window_loss_sum = window_loss_sum + step_loss
 
@@ -277,17 +227,13 @@ def train(cfg: DictConfig):
                 num_updates += 1
 
             # --- reset terminated envs ---
-            states = reset_terminated(states, too_far, pos_ref, vel_ref, acc_ref)
+            states = reset_terminated(states, too_far, pos_ref, vel_ref)
 
 
         avg_ep_loss = ep_loss / num_updates
         if avg_ep_loss < 1.5:
-            print(f"Saving policy of taj freq w = {cfg.env.traj.w}")
-            torch.save(policy.state_dict(), os.path.join(output_dir, f"trajectory_tracking_w_{cfg.env.traj.w}.pt"))
-            
             cfg.env.traj.w += 0.25
             print(f"Increased trajectory frequency to {cfg.env.traj.w}")
-        
         print(f"  Episode {ep+1:>4}/{episodes}  |  Avg Loss: {avg_ep_loss:.4f}")
 
         if avg_ep_loss < best_loss:
@@ -322,6 +268,8 @@ def load_trajectory(path: str, steps: int, device) -> dict:
         acc : (steps, 3)
         dt  : float  — inferred from the t column
     """
+    import pandas as pd
+
     df = pd.read_csv(path)
 
     assert len(df) >= steps, f"Trajectory too short: {len(df)} rows < {steps} steps"
@@ -337,8 +285,10 @@ def load_trajectory(path: str, steps: int, device) -> dict:
 
 
 def test(cfg: DictConfig):
-    policy_path = "/home/adame/torchAirBender/outputs/policies/TT/trajectory_tracking_w_2.5.pt"
-    # policy_path = "/home/adame/torchAirBender/outputs/las_mejores/TT_curriculum.pt"
+    # policy_path = "/home/adame/torchAirBender/outputs/policies/TT_BEST.pt"
+    # policy_path = "/home/adame/torchAirBender/outputs/policies/trajectory_tracking_best.pt"
+    # policy_path = "/home/adame/torchAirBender/outputs/policies/TT/trajectory_tracking_best.pt"
+    policy_path = "/home/adame/torchAirBender/outputs/las_mejores/TT_curriculum.pt"
     dt      = cfg.dt
     device  = cfg.device
     steps   = cfg.steps
@@ -413,14 +363,14 @@ def test(cfg: DictConfig):
             dist    = torch.linalg.norm(pos_ref - states[:, 0:3], dim=-1)
             too_far = dist > cfg.env.max_dist_to_target
 
-            step_loss   = compute_loss(states, pos_ref, vel_ref, acc_ref, cfg.env.loss_weights)
+            step_loss   = compute_loss(states, pos_ref, vel_ref, cfg.env.loss_weights)
             total_loss += step_loss.item()
 
             traj[t] = torch.cat([states[0], actions[0], pos_ref[0]], dim=0)
 
             if too_far[0]:
                 print(f"  !! Terminated at step {t+1} — dist: {dist[0]:.3f}")
-                states = reset_terminated(states, too_far, pos_ref, vel_ref, acc_ref)
+                states = reset_terminated(states, too_far, pos_ref, vel_ref)
 
     print(f"\n  Avg Loss:   {total_loss / steps:.4f}")
 

@@ -9,16 +9,17 @@ target_boundary: 3.0
 termination_penalty: 10.0
 
 loss_weights:
-  pos: 2.0
+  pos: 1.5
   vel: 1.0
+  att: 0.1
   body_rates: 0.1
 
 
 traj:
-  num_harmonics: 5  # must be integer
+  num_harmonics: 2  # must be integer
   z_offset: 2.0
   A: 1.0
-  w: 0.75
+  w: 3.0
   phi: 2.0
 
 max_dist_to_target: 4.0
