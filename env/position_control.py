@@ -117,7 +117,7 @@ def compute_loss(
 def train(cfg: DictConfig):
     start = time.time()
     # Path for saving the best and last policies
-    output_dir = "/home/adame/torchAirBender/outputs/policies"
+    output_dir = "/home/adame/torchAirBender/outputs/policies/PC"
     os.makedirs(output_dir, exist_ok=True)
 
     # Simulation params
@@ -143,7 +143,7 @@ def train(cfg: DictConfig):
 
     # Pre-allocate truncation loss buffer (replace the list approach)
     truncation_losses = torch.empty(truncation, device=device)  # for logging only
-    
+
     # Store the trajectory of env 0 for visualization (states + actions)
     traj_env0 = torch.empty((steps, 17), device=device)  # 13 state + 4 actions
 
@@ -260,7 +260,7 @@ def train(cfg: DictConfig):
 
 def test(cfg: DictConfig):
     policy_path = "/home/adame/torchAirBender/outputs/policies/position_control_best.pt"
-    policy_path = "/home/adame/torchAirBender/outputs/policies/BEST.pt"
+    # policy_path = "/home/adame/torchAirBender/outputs/policies/BEST.pt"
     dt       = cfg.dt
     device   = cfg.device
     steps    = 2000

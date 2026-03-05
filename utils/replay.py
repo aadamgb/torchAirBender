@@ -312,9 +312,14 @@ class BaseRenderer:
                     x, y, z = self._arrow_tris[frame, i, k, v]
                     self._arrow_v[base + v] = ti.Vector([x, y, z])
 
+    
     # ------------------------------------------------------------------
     # Hook for subclasses
     # ------------------------------------------------------------------
+
+    def _handle_keys(self, window) -> None:
+        """Override to handle subclass-specific keypresses."""
+        pass
 
     def _draw_extras(self, scene, frame: int):
         """Override in subclasses to add extra draw calls (targets, traces, etc.)."""
@@ -353,6 +358,8 @@ class BaseRenderer:
                     frame = 0;  paused = False
                 if k == 'o':
                     show_axes = not show_axes
+                    
+                self._handle_keys(window)
 
             # --- update fields for this frame ---
             self._update_frame(frame)
@@ -424,6 +431,7 @@ class PositionControlRenderer(BaseRenderer):
     """
     def __init__(self, target_pos: np.ndarray, boundary: float, **kwargs):
         super().__init__(**kwargs)
+        self.show_cube = True        # ← owns its own toggle state
         target_pos = np.array(target_pos, dtype=np.float32)
         if target_pos.ndim == 1:
             target_pos = target_pos[None, :]          # (1, 3) — broadcast to all frames
@@ -455,6 +463,11 @@ class PositionControlRenderer(BaseRenderer):
             self._cube_verts[k * 2]     = ti.Vector(corners_ti[a].tolist())
             self._cube_verts[k * 2 + 1] = ti.Vector(corners_ti[b].tolist())
 
+    def _handle_keys(self, window) -> None:
+        if window.event.key == 'b':
+            self.show_cube = not self.show_cube
+
+
     def _update_target(self, frame: int):
         # Clamp frame index so (1, 3) static targets work too
         idx = min(frame, len(self.target_pos) - 1)
@@ -464,4 +477,48 @@ class PositionControlRenderer(BaseRenderer):
     def _draw_extras(self, scene, frame: int):
         self._update_target(frame)                   
         scene.particles(self._target_ti, radius=self._sphere_r * 2.0, color=(0.1, 0.9, 0.3))
-        scene.lines(self._cube_verts, width=3.0, color=(1.0, 0.1, 0.1))  # Cube red edges
+        if self.show_cube:
+            scene.lines(self._cube_verts, width=3.0, color=(1.0, 0.1, 0.1))
+
+
+# ---------------------------------------------------------------------------
+# TrajectoryTrackingRenderer
+# ---------------------------------------------------------------------------
+
+class TrajectoryTrackingRenderer(BaseRenderer):
+    """
+    Extends BaseRenderer with:
+      - A reference trajectory path drawn as a polyline
+      - A moving target sphere at the current reference position
+    
+    Extra args:
+        ref_trajectory : (T, 3) ENU reference positions for env 0
+    """
+    def __init__(self, ref_trajectory: np.ndarray, **kwargs):
+        super().__init__(**kwargs)
+
+        self._ref_enu = np.array(ref_trajectory, dtype=np.float32)  # (T, 3) ENU
+
+        # Convert full path to Taichi coords
+        self._ref_ti = enu_to_ti(self._ref_enu)                      # (T, 3)
+
+        # Build polyline: pairs of consecutive points [p0,p1, p1,p2, p2,p3, ...]
+        n_segments = self._T - 1
+        self._path_verts = ti.Vector.field(3, dtype=ti.f32, shape=n_segments * 2)
+        for i in range(n_segments):
+            self._path_verts[i * 2]     = ti.Vector(self._ref_ti[i].tolist())
+            self._path_verts[i * 2 + 1] = ti.Vector(self._ref_ti[i + 1].tolist())
+
+        # Moving target sphere — updated per frame
+        self._target_ti = ti.Vector.field(3, dtype=ti.f32, shape=1)
+        self._target_ti[0] = ti.Vector(self._ref_ti[0].tolist())
+
+    def _update_target(self, frame: int):
+        self._target_ti[0] = ti.Vector(self._ref_ti[frame].tolist())
+
+    def _draw_extras(self, scene, frame: int):
+        self._update_target(frame)
+        # Reference path — dim yellow
+        scene.lines(self._path_verts, width=2.0, color=(0.9, 0.8, 0.1))
+        # Current target point on path — bright green sphere
+        scene.particles(self._target_ti, radius=self._sphere_r * 2.0, color=(1.0, 0.0, 0.0))

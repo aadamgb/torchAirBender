@@ -2,6 +2,7 @@ name: position_control
 
 
 nn: [13, 128, 128, 4]
+# nn: [13, 64, 64, 4]
 lr: 1e-3
 
 target_boundary: 3.0
