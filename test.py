@@ -1,7 +1,7 @@
 import hydra
-from omegaconf import DictConfig
 import importlib
 import time
+from omegaconf import DictConfig
 
 
 @hydra.main(config_path="cfg", config_name="config")
@@ -11,12 +11,10 @@ def main(cfg: DictConfig):
     except ImportError:
         print(f"Error: Env '{cfg.env.name}' not found in env/ folder.")
         return
-    
-    print(f"Executing Environment: {cfg.env.name.upper()}")
 
-    environment.train(cfg)
+    print(f"Testing Environment: {cfg.env.name.upper()}")
+    environment.test(cfg)
+
 
 if __name__ == "__main__":
-    start = time.time()
     main()
-    print(f"Execution time: {time.time() - start:.2f}s")

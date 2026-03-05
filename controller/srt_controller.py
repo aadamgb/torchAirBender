@@ -20,8 +20,8 @@ class SRTController(BaseController):
     """
 
     def __init__(self, cfg: DictConfig):
-        self.max_thrust = cfg.env.max_thrust   # e.g. 2.0
+        self.max_thrust = cfg.dynamics.max_thrust   
 
     def __call__(self, raw: Tensor) -> Tensor:
-        # raw: (N, 4) in (0, 1) from Sigmoid
+        # raw: (N, 4) in range (0, 1) from Sigmoid
         return raw * self.max_thrust           # (N, 4) in (0, max_thrust)

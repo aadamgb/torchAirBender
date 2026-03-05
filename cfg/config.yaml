@@ -10,9 +10,11 @@ defaults:
 device: "cuda"
 dt: 0.01
 
+
 num_envs: 2048
-episodes: 50
-steps: 1000
+episodes: 30
+steps: 500
+
 truncation: 100
 
-lr: 1e-3
+

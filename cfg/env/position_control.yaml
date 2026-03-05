@@ -2,7 +2,12 @@ name: position_control
 
 
 nn: [13, 128, 128, 4]
-
+lr: 1e-3
 
 target_boundary: 3.0
 termination_penalty: 10.0
+
+loss_weights:
+  pos: 1.0
+  vel: 0.25
+  body_rates: 0.1

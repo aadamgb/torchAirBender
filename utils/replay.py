@@ -424,9 +424,13 @@ class PositionControlRenderer(BaseRenderer):
     """
     def __init__(self, target_pos: np.ndarray, boundary: float, **kwargs):
         super().__init__(**kwargs)
-        self.target_pos = np.array(target_pos, dtype=np.float32)
+        target_pos = np.array(target_pos, dtype=np.float32)
+        if target_pos.ndim == 1:
+            target_pos = target_pos[None, :]          # (1, 3) — broadcast to all frames
+        self.target_pos = target_pos                  # (T, 3) or (1, 3)
+
         self._target_ti = ti.Vector.field(3, dtype=ti.f32, shape=1)
-        self._update_target()
+        self._update_target(0)
 
         # Build boundary cube edges (12 edges x 2 verts = 24 verts)
         h = boundary / 2.0
@@ -451,11 +455,13 @@ class PositionControlRenderer(BaseRenderer):
             self._cube_verts[k * 2]     = ti.Vector(corners_ti[a].tolist())
             self._cube_verts[k * 2 + 1] = ti.Vector(corners_ti[b].tolist())
 
-    def _update_target(self):
-        t = enu_to_ti(self.target_pos[None])[0]
+    def _update_target(self, frame: int):
+        # Clamp frame index so (1, 3) static targets work too
+        idx = min(frame, len(self.target_pos) - 1)
+        t = enu_to_ti(self.target_pos[idx][None])[0]
         self._target_ti[0] = ti.Vector(t.tolist())
 
     def _draw_extras(self, scene, frame: int):
-        self._update_target()
+        self._update_target(frame)                   
         scene.particles(self._target_ti, radius=self._sphere_r * 2.0, color=(0.1, 0.9, 0.3))
-        scene.lines(self._cube_verts, width=3.0, color=(1.0, 0.1, 0.1))  # red cube edges
+        scene.lines(self._cube_verts, width=3.0, color=(1.0, 0.1, 0.1))  # Cube red edges

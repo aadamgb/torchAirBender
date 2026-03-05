@@ -63,3 +63,7 @@ km:
   nominal: 0.012
   min: 0.009
   max: 0.015
+
+
+
+max_thrust: 2.0
