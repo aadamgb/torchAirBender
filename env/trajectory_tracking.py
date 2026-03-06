@@ -337,7 +337,7 @@ def load_trajectory(path: str, steps: int, device) -> dict:
 
 
 def test(cfg: DictConfig):
-    policy_path = "/home/adame/torchAirBender/outputs/policies/TT/trajectory_tracking_w_2.5.pt"
+    policy_path = "/home/adame/torchAirBender/outputs/policies/TT/trajectory_tracking_final.pt"
     # policy_path = "/home/adame/torchAirBender/outputs/las_mejores/TT_curriculum.pt"
     dt      = cfg.dt
     device  = cfg.device
