@@ -342,6 +342,10 @@ class BaseRenderer:
         frame     = 0
         paused    = False
         show_axes = True
+        show_ground = True
+        fpv_mode    = False
+        prev_fpv_mode = False
+        saved_cam   = {"pos": (0, 3, 5), "look": (0, 0, 0), "up": (0, 1, 0)}
 
         print("Space=pause  R=restart  O=toggle axes  X/Esc=quit")
 
@@ -358,6 +362,11 @@ class BaseRenderer:
                     frame = 0;  paused = False
                 if k == 'o':
                     show_axes = not show_axes
+                if k == 'g':
+                    show_ground = not show_ground
+                if k == 'f':
+                    prev_fpv_mode = fpv_mode
+                    fpv_mode = not fpv_mode
                     
                 self._handle_keys(window)
 
@@ -365,7 +374,30 @@ class BaseRenderer:
             self._update_frame(frame)
 
             # --- camera ---
-            camera.track_user_inputs(window, movement_speed=0.05, hold_key=ti.ui.LMB)
+            if fpv_mode:
+                cx, cy, cz = self._centers[frame]
+                drone_pos  = np.array([cx, cy, cz])
+
+                tx, ty, tz = self._body_axis_tips[frame, 0]   # body X = forward
+                fwd = np.array([tx, ty, tz]) - drone_pos
+                fwd /= np.linalg.norm(fwd) + 1e-12
+
+                ux, uy, uz = self._body_axis_tips[frame, 2]   # body Z = up
+                up  = np.array([ux, uy, uz]) - drone_pos
+                up  /= np.linalg.norm(up) + 1e-12
+
+                camera.position(cx, cy, cz)
+                camera.lookat(cx + fwd[0], cy + fwd[1], cz + fwd[2])
+                camera.up(float(up[0]), float(up[1]), float(up[2]))
+            else:
+                if prev_fpv_mode:   # just exited FPV — restore saved pose
+                    p, l, u = saved_cam["pos"], saved_cam["look"], saved_cam["up"]
+                    camera.position(*p)
+                    camera.lookat(*l)
+                    camera.up(*u)
+                camera.track_user_inputs(window, movement_speed=0.05, hold_key=ti.ui.LMB)
+
+            prev_fpv_mode = fpv_mode
             scene.set_camera(camera)
 
             # --- lighting ---
@@ -374,8 +406,9 @@ class BaseRenderer:
             scene.point_light((0.0, 10.0, 0.0), color=(1.0, 1.0, 1.0))
 
             # --- ground ---
-            scene.mesh(self._ground_v, indices=self._ground_i, per_vertex_color=self._ground_c)
-            scene.lines(self._grid_verts, width=1.0, color=(0.2, 0.2, 0.3))
+            if show_ground:
+                scene.mesh(self._ground_v, indices=self._ground_i, per_vertex_color=self._ground_c)
+                scene.lines(self._grid_verts, width=1.0, color=(0.2, 0.2, 0.3))
 
             # --- world / body axes ---
             if show_axes:
@@ -399,13 +432,14 @@ class BaseRenderer:
             # --- HUD ---
             cx, cy, cz = self._centers[frame]
             canvas.scene(scene)
-            window.GUI.begin("Info", 0.01, 0.01, 0.30, 0.22)
-            window.GUI.text(f"Frame : {frame} / {self._T - 1}")
-            window.GUI.text(f"Time  : {frame * self._dt:.2f} s")
-            window.GUI.text(f"Pos (ENU): x={cx:.2f}  y={-cz:.2f}  z={cy:.2f}")
-            window.GUI.text(f"Axes  : {'ON  [O]' if show_axes else 'OFF [O]'}")
-            window.GUI.text(f"{'[PAUSED]' if paused else '[PLAYING]'}")
-            window.GUI.end()
+            with window.GUI.sub_window("Info", 0.01, 0.01, 0.32, 0.30) as sw:
+                sw.text(f"Frame : {frame} / {self._T - 1}")
+                sw.text(f"Time  : {frame * self._dt:.2f} s")
+                sw.text(f"Pos (ENU): x={cx:.2f}  y={-cz:.2f}  z={cy:.2f}")
+                show_axes   = sw.checkbox("Axes    [O]", show_axes)
+                show_ground = sw.checkbox("Ground  [G]", show_ground)
+                fpv_mode    = sw.checkbox("FPV     [F]", fpv_mode)
+                sw.text(f"{'[PAUSED] Space=pause' if paused else '[PLAYING] Space=pause'}")
 
             window.show()
 

@@ -5,14 +5,18 @@ name: quadrotor
 # ============================
 
 # Scale factor — drives correlated parameter sampling across envs
+# sf:
+#   nominal: 0.5
+#   min: 0.0
+#   max: 1.0
 sf:
   nominal: 0.5
-  min: 0.0
-  max: 1.0
+  min: 0.5
+  max: 0.5
 
 
 # Noise factor applied on top of correlated scaling
-nf: 0.00005 
+nf: 0.0 #0.2 
 
 
 # -----------------------------

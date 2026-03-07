@@ -19,7 +19,7 @@ traj:
   num_harmonics: 2  # must be integer
   z_offset: 2.0
   A: 1.0
-  w: 1.0
+  w: 2.0
   phi: 2.0
 
 max_dist_to_target: 4.0

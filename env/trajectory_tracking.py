@@ -337,8 +337,8 @@ def load_trajectory(path: str, steps: int, device) -> dict:
 
 
 def test(cfg: DictConfig):
-    policy_path = "/home/adame/torchAirBender/outputs/policies/TT/trajectory_tracking_final.pt"
-    # policy_path = "/home/adame/torchAirBender/outputs/las_mejores/TT_curriculum.pt"
+    policy_path = "/home/adame/torchAirBender/outputs/policies/TT/trajectory_tracking_w_2.75.pt"
+    # policy_path = "/home/adame/torchAirBender/outputs/las_mejores/trajectory_tracking_best.pt"
     dt      = cfg.dt
     device  = cfg.device
     steps   = cfg.steps
@@ -399,6 +399,7 @@ def test(cfg: DictConfig):
 
     # ── rollout ──────────────────────────────────────────────────────────
     total_loss = 0.0
+    sq_error_sum = 0.0
     with torch.inference_mode():
         for t in range(steps):
 
@@ -407,11 +408,13 @@ def test(cfg: DictConfig):
 
             obs     = get_observation(states, pos_ref, vel_ref, acc_ref)
             raw     = policy(obs)
-            actions = controller(raw)
+            actions = controller(raw)   # mapping the policy outputs \in [0,1] to motor thrust
             states  = quadrotor.step(state=states, action=actions)
 
             dist    = torch.linalg.norm(pos_ref - states[:, 0:3], dim=-1)
             too_far = dist > cfg.env.max_dist_to_target
+
+            sq_error_sum += (dist**2).item()  # accumulate mse for logging
 
             step_loss   = compute_loss(states, pos_ref, vel_ref, acc_ref, cfg.env.loss_weights)
             total_loss += step_loss.item()
@@ -422,7 +425,9 @@ def test(cfg: DictConfig):
                 print(f"  !! Terminated at step {t+1} — dist: {dist[0]:.3f}")
                 states = reset_terminated(states, too_far, pos_ref, vel_ref, acc_ref)
 
-    print(f"\n  Avg Loss:   {total_loss / steps:.4f}")
+
+        print(f"\n  Avg Loss:   {total_loss / steps:.4f}")
+        print(f"  RMSE Pos:   { (sq_error_sum / steps) ** 0.5:.4f} m")
 
     # ── replay ───────────────────────────────────────────────────────────
     renderer = TrajectoryTrackingRenderer(
@@ -434,3 +439,32 @@ def test(cfg: DictConfig):
         dt=dt,
     )
     renderer.run()
+
+
+
+
+    ### Plotting some stuff for analysis (delte later on)
+
+    import matplotlib.pyplot as plt
+    import numpy as np
+
+    # convert to cpu numpy
+    traj_np = traj.cpu().numpy()
+
+    actions = traj_np[:, 13:17]  # 4 motors
+    time = np.arange(steps) * dt
+
+    plt.figure(figsize=(10,5))
+
+    plt.plot(time, actions[:,0], label="motor 1")
+    plt.plot(time, actions[:,1], label="motor 2")
+    plt.plot(time, actions[:,2], label="motor 3")
+    plt.plot(time, actions[:,3], label="motor 4")
+
+    plt.xlabel("Time [s]")
+    plt.ylabel("Motor command")
+    plt.title("Quadrotor Actions Over Rollout")
+    plt.legend()
+    plt.grid(True)
+
+    plt.show()
