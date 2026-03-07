@@ -197,8 +197,8 @@ class BaseRenderer:
     # ------------------------------------------------------------------
 
     def _build_ground(self):
-        grid_n    = 11
-        grid_half = 3.0
+        grid_n    = 15
+        grid_half = 15
         edge      = 2.0 * grid_half / (grid_n - 1)
 
         self._grid_verts = ti.Vector.field(3, dtype=ti.f32, shape=4 * grid_n)
@@ -386,8 +386,12 @@ class BaseRenderer:
                 up  = np.array([ux, uy, uz]) - drone_pos
                 up  /= np.linalg.norm(up) + 1e-12
 
+                minus_y = np.cross(fwd, up)
+                minus_y /= np.linalg.norm(minus_y) + 1e-12
+
                 camera.position(cx, cy, cz)
-                camera.lookat(cx + fwd[0], cy + fwd[1], cz + fwd[2])
+                # camera.lookat(cx + fwd[0], cy + fwd[1], cz + fwd[2])
+                camera.lookat(cx + minus_y[0], cy + minus_y[1], cz + minus_y[2])
                 camera.up(float(up[0]), float(up[1]), float(up[2]))
             else:
                 if prev_fpv_mode:   # just exited FPV — restore saved pose
@@ -556,3 +560,140 @@ class TrajectoryTrackingRenderer(BaseRenderer):
         scene.lines(self._path_verts, width=2.0, color=(0.9, 0.8, 0.1))
         # Current target point on path — bright green sphere
         scene.particles(self._target_ti, radius=self._sphere_r * 2.0, color=(1.0, 0.0, 0.0))
+
+
+
+
+# ---------------------------------------------------------------------------
+# RacingRenderer
+# ---------------------------------------------------------------------------
+
+class RacingRenderer(TrajectoryTrackingRenderer):
+    """
+    Extends TrajectoryTrackingRenderer with racing gates loaded from a .obj file.
+
+    Args:
+        gates_position : (N, 3) ENU gate centre positions [m]
+        gates_rpy      : (N, 3) or (3,) Roll/Pitch/Yaw in degrees
+                         If shape (3,) the same orientation is applied to all gates.
+        gate_mesh_path : path to gate .obj (or .glb) file
+        gate_scale     : uniform scale applied to the raw mesh vertices
+        gate_color     : RGB tuple for gate rendering color
+        ref_trajectory : optional (T, 3) ENU reference path — if None, path/target
+                         sphere are suppressed
+    """
+
+    def __init__(
+        self,
+        gates_position: np.ndarray,
+        gates_rpy:      np.ndarray,
+        gate_mesh_path: str,
+        gate_scale:     float = 1.0,
+        gate_color:     tuple = (0.1, 0.6, 1.0),
+        ref_trajectory: np.ndarray = None,
+        **kwargs,
+    ):
+        # ── optional ref trajectory ──────────────────────────────────────
+        # TrajectoryTrackingRenderer requires ref_trajectory, so build a
+        # dummy (static point at frame-0 position) when none is supplied.
+        traj_np = np.array(kwargs["trajectory"], dtype=np.float32)
+        if ref_trajectory is None:
+            ref_trajectory = np.tile(traj_np[0, 0:3], (len(traj_np), 1))
+            self._has_ref_traj = False
+        else:
+            ref_trajectory = np.array(ref_trajectory, dtype=np.float32)
+            self._has_ref_traj = True
+
+        super().__init__(ref_trajectory=ref_trajectory, **kwargs)
+
+        self._gate_color = gate_color
+
+        # ── load mesh ────────────────────────────────────────────────────
+        try:
+            import trimesh
+        except ImportError:
+            raise ImportError("trimesh is required for RacingRenderer: pip install trimesh")
+
+        raw = trimesh.load(gate_mesh_path, force="mesh")
+        if isinstance(raw, trimesh.Scene):
+            raw = trimesh.util.concatenate(tuple(raw.geometry.values()))
+
+        # Local body-frame vertices + faces
+        verts_body = raw.vertices.astype(np.float32) * gate_scale   # (V, 3)
+        faces      = raw.faces.astype(np.int32)                      # (F, 3)
+        V = len(verts_body)
+        F = len(faces)
+
+        # ── normalise gates_rpy to (N, 3) ───────────────────────────────
+        gates_position = np.array(gates_position, dtype=np.float32)  # (N, 3) ENU
+        gates_rpy      = np.array(gates_rpy,      dtype=np.float32)
+        N = len(gates_position)
+        if gates_rpy.ndim == 1:
+            gates_rpy = np.tile(gates_rpy, (N, 1))                   # broadcast
+
+        # ── build world-space vertices for every gate ────────────────────
+        all_verts_enu = np.zeros((N * V, 3), dtype=np.float32)
+
+        for g in range(N):
+            R   = self._rpy_deg_to_rotmat(gates_rpy[g])              # 3x3
+            pos = gates_position[g]                                   # (3,) ENU
+            # rotate body verts then translate to gate position (all in ENU)
+            all_verts_enu[g * V : (g + 1) * V] = (R @ verts_body.T).T + pos
+
+        # Convert all vertices to Taichi coords in one call
+        all_verts_ti = enu_to_ti(all_verts_enu)                      # (N*V, 3)
+
+        # ── build index buffer — offset each gate by g*V ─────────────────
+        all_faces = np.zeros((N * F, 3), dtype=np.int32)
+        for g in range(N):
+            all_faces[g * F : (g + 1) * F] = faces + g * V
+
+        # ── upload to Taichi fields ───────────────────────────────────────
+        self._gate_v = ti.Vector.field(3, dtype=ti.f32, shape=N * V)
+        self._gate_i = ti.field(dtype=ti.i32,           shape=N * F * 3)
+
+        self._gate_v.from_numpy(all_verts_ti)
+        self._gate_i.from_numpy(all_faces.flatten())
+
+    # ------------------------------------------------------------------
+    # Helpers
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _rpy_deg_to_rotmat(rpy_deg: np.ndarray) -> np.ndarray:
+        """ZYX extrinsic (aerospace convention): Rz @ Ry @ Rx."""
+        r, p, y = np.radians(rpy_deg).tolist()
+        cr, sr = math.cos(r), math.sin(r)
+        cp, sp = math.cos(p), math.sin(p)
+        cy, sy = math.cos(y), math.sin(y)
+
+        Rx = np.array([[1,  0,   0 ],
+                       [0,  cr, -sr],
+                       [0,  sr,  cr]], dtype=np.float32)
+
+        Ry = np.array([[ cp, 0, sp],
+                       [  0, 1,  0],
+                       [-sp, 0, cp]], dtype=np.float32)
+
+        Rz = np.array([[cy, -sy, 0],
+                       [sy,  cy, 0],
+                       [ 0,   0, 1]], dtype=np.float32)
+
+        return Rz @ Ry @ Rx
+
+    # ------------------------------------------------------------------
+    # Draw
+    # ------------------------------------------------------------------
+
+    def _draw_extras(self, scene, frame: int):
+        # Reference path + moving target — only when a real ref was given
+        if self._has_ref_traj:
+            super()._draw_extras(scene, frame)
+
+        # Gates
+        scene.mesh(
+            self._gate_v,
+            indices=self._gate_i,
+            color=self._gate_color,
+            # two_sided=True,
+        )

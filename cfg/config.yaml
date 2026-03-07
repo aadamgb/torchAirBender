@@ -12,11 +12,8 @@ dt: 0.01
 
 
 num_envs: 2048
-episodes: 3
+episodes: 300
 steps: 800
 
 truncation: 50
-
-
-# test_traj: "/home/adame/torchAirBender/miscellaneous/trajectories/togt_traj.csv"
 

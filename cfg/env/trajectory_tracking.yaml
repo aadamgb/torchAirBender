@@ -2,7 +2,8 @@ name: trajectory_tracking
 # name: tt_test
 
 
-nn: [16, 128, 128, 4]
+# nn: [16, 128, 128, 4]
+nn: [16, 64, 64, 4]
 lr: 1e-3
 
 target_boundary: 3.0
@@ -19,7 +20,7 @@ traj:
   num_harmonics: 2  # must be integer
   z_offset: 2.0
   A: 1.0
-  w: 2.0
+  w: 1.0
   phi: 2.0
 
 max_dist_to_target: 4.0
