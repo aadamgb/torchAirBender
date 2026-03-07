@@ -254,10 +254,9 @@ def _build_racing_renderer(
     return RacingRenderer(
         gates_position=gates_position,
         gates_rpy=gates_rpy,
-        # gate_mesh_path="/home/adame/torchAirBender/miscellaneous/gate_uzh2.obj",
         gate_mesh_path="/home/adame/torchAirBender/miscellaneous/gate.obj",
         gate_scale=1.0,
-        gate_color=(0.5, 0.0, 0.5),
+        gate_color=(0.25, 0.0, 0.5),
         ref_trajectory=ref_trajectory,
         trajectory=traj[:, :17].cpu().numpy(),
         arm_length=float(randomized_params.arm_length[0].cpu()),
@@ -397,6 +396,7 @@ def train(cfg: DictConfig):
 
 def test(cfg: DictConfig):
     policy_path = "/home/adame/torchAirBender/outputs/policies/racing/show2rob.pt"
+    policy_path = "/home/adame/torchAirBender/outputs/policies/racing/racing_at_0.87.pt"
     # policy_path = "/home/adame/torchAirBender/outputs/las_mejores/trajectory_tracking_w_2.75.pt"
     dt     = cfg.dt
     device = cfg.device
@@ -419,7 +419,7 @@ def test(cfg: DictConfig):
     print(f"Loaded policy from: {policy_path}")
 
     # build ref callable
-    get_ref, _ = build_get_ref(cfg, device, dt, speed_scale=0.85)
+    get_ref, _ = build_get_ref(cfg, device, dt, speed_scale=0.87)
 
     # init
     controller        = SRTController(cfg)

@@ -13,7 +13,7 @@ dt: 0.01
 
 num_envs: 2048
 episodes: 300
-steps: 800
+steps: 823
 
 truncation: 50
 

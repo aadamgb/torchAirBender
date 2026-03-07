@@ -406,8 +406,9 @@ class BaseRenderer:
 
             # --- lighting ---
             scene.ambient_light((0.3, 0.3, 0.3))
-            scene.point_light((0.0, -1.0, 0.0), color=(1.0, 1.0, 1.0))
+            scene.point_light((0.0, -3.0, 0.0), color=(1.0, 1.0, 1.0))
             scene.point_light((0.0, 10.0, 0.0), color=(1.0, 1.0, 1.0))
+            scene.point_light((-10.0, 10.0, 0.0), color=(1.0, 1.0, 1.0))
 
             # --- ground ---
             if show_ground:
@@ -560,8 +561,6 @@ class TrajectoryTrackingRenderer(BaseRenderer):
         scene.lines(self._path_verts, width=2.0, color=(0.9, 0.8, 0.1))
         # Current target point on path — bright green sphere
         scene.particles(self._target_ti, radius=self._sphere_r * 2.0, color=(1.0, 0.0, 0.0))
-
-
 
 
 # ---------------------------------------------------------------------------
