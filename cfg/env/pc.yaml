@@ -1,12 +1,12 @@
 name: position_control
-
+abbr: pc
 
 nn: [13, 128, 128, 4]
 # nn: [13, 64, 64, 4]
+
 lr: 1e-3
 
-target_boundary: 3.0
-termination_penalty: 10.0
+boundary: 3.0   # cubic boundar  (x,y,z=0)
 
 loss_weights:
   pos: 1.0

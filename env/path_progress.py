@@ -13,7 +13,7 @@ from utils.replay import TrajectoryTrackingRenderer
 from utils.math import quat_to_rotmat
 
 from dynamics.quadrotor_dynamics import QuadrotorDynamics
-from controller.srt_controller import SRTController
+from controller.srt_controller import CTBRController#, SRTController
 
 
 def generate_trajectory_params(
@@ -161,7 +161,7 @@ def get_observation(
     p_error = pos_ref - p   # (N, 3)
     v_error = vel_ref - v   # (N, 3)
 
-    return torch.cat([p_error, v_error, acc_ref, q, w], dim=-1)  # (N, 16)
+    return torch.cat([p_error, v_error, acc_ref, q, w], dim=-1)  # (N, 13)
 
 def compute_loss(
     states: Tensor,
@@ -199,7 +199,7 @@ def compute_loss(
 
 def train(cfg: DictConfig):
     start = time.time()
-    output_dir = "/home/adame/torchAirBender/outputs/policies/TT"
+    output_dir = "/home/adame/torchAirBender/outputs/policies/PP"
     os.makedirs(output_dir, exist_ok=True)
 
     dt         = cfg.dt
@@ -210,7 +210,7 @@ def train(cfg: DictConfig):
     truncation = cfg.truncation
 
     print(f"\n{'='*75}")
-    print(f"  Trajectory Tracking Training")
+    print(f"  Path Progress")
     print(f"  Envs: {num_envs}  |  Episodes: {episodes}  |  Steps: {steps}  |  Horizon: {truncation}")
     print(f"{'='*75}\n")
 
@@ -219,19 +219,24 @@ def train(cfg: DictConfig):
     traj_env0 = torch.empty((steps, 20), device=device)               # 13 state + 4 actions + 3 ref pos
 
     quadrotor = QuadrotorDynamics(cfg)
-    policy = MLP(
-        layer_sizes=cfg.env.nn,                                        # must be [16, ..., 4]
-        activation=nn.ReLU,
-        output_activation=nn.Sigmoid(),
-        output_bias_init=0.0,
-    ).to(device)
-    # policy.load_state_dict(torch.load(
-    #     "/home/adame/torchAirBender/outputs/policies/TT/trajectory_tracking_w_1.5.pt",
-    #     map_location=device,
-    # ))
 
-    # controller = SRTController(cfg)
-    optimizer  = torch.optim.Adam(policy.parameters(), lr=cfg.env.lr)
+    hover_thrust = quadrotor.get_srt_hover()
+    controller   = CTBRController(
+        hover_thrust = hover_thrust * 4.0,
+        alloc_matrix = quadrotor._alloc_matrix,
+        J            = quadrotor.J,
+        dt           = dt,
+        hover_ratio  = cfg.env.max_mass_norm_thrust,
+        w_max        = cfg.env.w_max,       
+        kp_rate      = cfg.env.kp_rate,     
+    )
+    policy = MLP(layer_sizes=cfg.env.policy, activation=nn.ReLU, 
+                 output_activation=nn.Sigmoid(), output_bias_init=0.0).to(device)
+    encoder = MLP(layer_sizes=cfg.env.encoder, activation=nn.ReLU).to(device)
+    # decoder = MLP(layer_sizes=cfg.env.encoder[::-1], activation=nn.ReLU).to(device)
+
+    optimizer  = torch.optim.Adam(list(policy.parameters()) +
+                                  list(encoder.parameters()), lr=cfg.env.lr)
 
     best_loss = float("inf")
     for ep in range(episodes):
@@ -242,11 +247,21 @@ def train(cfg: DictConfig):
         states, randomized_params = reset(cfg, traj_params)
         quadrotor.set_parameters(randomized_params)
 
-        hover_thrust = quadrotor.get_srt_hover()   # per rotor
-        controller   = SRTController(hover_thrust, hover_ratio=cfg.env.max_mass_norm_thrust)
+        hover_thrust = quadrotor.get_srt_hover() * 4.0  # per rotor
+        controller.update_parameters(
+            hover_thrust = hover_thrust,
+            alloc_matrix = quadrotor._alloc_matrix,
+            J            = quadrotor.J,
+        )
 
         ep_loss    = 0.0
         num_updates = 0
+
+        # To print the RSME
+        sq_error_sum = torch.zeros(1, device=device)
+        num_samples = 0
+
+        # lambda_recon = 0.05 
 
         for t in range(steps):
 
@@ -255,12 +270,32 @@ def train(cfg: DictConfig):
                 window_start = t
                 window_loss_sum = torch.zeros(1, device=device)
 
+                # Encode the randomized_params
+                p = quadrotor.get_parameters()
+                # print(p)
+                scalars = torch.stack(
+                    (p["mass"],
+                    p["arm_length"],
+                    p["arm_angle"],
+                    p["km"]),
+                    dim=1
+                )
+                e = torch.cat((scalars, p["inertia"]), dim=1)
+                z = encoder(e)
+                # e_hat = decoder(z)
+
+                # --- reconstruction loss ---
+                # recon_loss = torch.mean((e_hat - e) ** 2)
+
+            # print(e[0], e_hat[0]) if t == steps - 1 else None
             # --- reference at current time ---
             pos_ref, vel_ref, acc_ref = get_target(t * dt, traj_params)  # (N, 3) each
 
             obs     = get_observation(states, pos_ref, vel_ref, acc_ref)
+            obs = torch.cat([obs, z], dim=1)  # add the ecoded env_params
             raw     = policy(obs)
-            actions = controller(raw)
+            actions, w = controller(raw, states[:, 10:13])
+            print(w[0]) if t == steps - 1 else None
             states  = quadrotor.step(state=states, action=actions)
 
             # --- termination ---
@@ -268,16 +303,20 @@ def train(cfg: DictConfig):
             too_far = dist > cfg.env.max_dist_to_target
             alive = ~too_far
 
+            sq_error_sum += (dist**2).sum()
+            num_samples += dist.numel()
+
             step_loss = compute_loss(states, pos_ref, vel_ref, acc_ref, cfg.env.loss_weights, mask=alive)
             truncation_losses[t % truncation] = step_loss.detach()
             window_loss_sum = window_loss_sum + step_loss
 
+            # Save the last trajectory for rendering
             if ep == episodes - 1:
                 traj_env0[t] = torch.cat([states[0].detach(), actions[0].detach(), pos_ref[0].detach(),], dim=0)
 
             if (t + 1) % truncation == 0 or (t + 1) == steps:
                 window_len = (t + 1) - window_start
-                loss = window_loss_sum / window_len
+                loss = window_loss_sum / window_len #+ lambda_recon * recon_loss
                 optimizer.zero_grad()
                 loss.backward()
                 optimizer.step()
@@ -289,21 +328,25 @@ def train(cfg: DictConfig):
 
 
         avg_ep_loss = ep_loss / num_updates
-        if avg_ep_loss < 1.5:
-            print(f"Saving policy of taj freq w = {cfg.env.traj.w}")
-            torch.save(policy.state_dict(), os.path.join(output_dir, f"trajectory_tracking_w_{cfg.env.traj.w}.pt"))
-            
+        rmse = torch.sqrt(sq_error_sum / num_samples).item()
+        print(f"  Episode {ep+1:>4}/{episodes}  |  Avg Loss: {avg_ep_loss:.4f}  |  RMSE: {rmse:.3f} m")
+
+        rmse_threshold = 0.2
+        if rmse < rmse_threshold:
+            print(f"RSME below {rmse_threshold} m increasing w = {cfg.env.traj.w} by 0.25 🔥")
+            torch.save(policy.state_dict(), os.path.join(output_dir, f"{cfg.env.name}_w_{cfg.env.traj.w}.pt"))
+            torch.save(encoder.state_dict(), os.path.join(output_dir, f"encoder_{cfg.env.abbr}_w_{cfg.env.traj.w}.pt"))
             cfg.env.traj.w += 0.25
-            print(f"Increased trajectory frequency to {cfg.env.traj.w} 🔥")
-        
-        print(f"  Episode {ep+1:>4}/{episodes}  |  Avg Loss: {avg_ep_loss:.4f}")
+
 
         if avg_ep_loss < best_loss:
             best_loss = avg_ep_loss
-            torch.save(policy.state_dict(), os.path.join(output_dir, "trajectory_tracking_best.pt"))
+            torch.save(policy.state_dict(), os.path.join(output_dir, f"{cfg.env.name}_best.pt"))
+            torch.save(encoder.state_dict(), os.path.join(output_dir, f"encoder_{cfg.env.abbr}_best.pt"))
 
     print(f"Total training time: {time.time() - start:.2f}s")
-    torch.save(policy.state_dict(), os.path.join(output_dir, "trajectory_tracking_final.pt"))
+    torch.save(policy.state_dict(), os.path.join(output_dir, f"{cfg.env.name}_final.pt"))
+    torch.save(encoder.state_dict(), os.path.join(output_dir, f"encode_{cfg.env.abbr}_final.pt"))
 
     renderer = TrajectoryTrackingRenderer(
         ref_trajectory=traj_env0[:, 17:20].cpu().numpy(),
@@ -345,9 +388,8 @@ def load_trajectory(path: str, steps: int, device) -> dict:
 
 
 def test(cfg: DictConfig):
-    # policy_path = "/home/adame/torchAirBender/outputs/policies/TT/trajectory_tracking_w_2.75.pt"
-    policy_path = "/home/adame/torchAirBender/outputs/policies/TT/trajectory_tracking_best.pt"
-    # policy_path = "/home/adame/torchAirBender/outputs/policies/TT/trajectory_tracking_final.pt"
+    policy_path = "/home/adame/torchAirBender/outputs/policies/PP/path_progress_w_1.75.pt"
+    encoder_path = "/home/adame/torchAirBender/outputs/policies/PP/encoder_pp_w_1.75.pt"
     dt      = cfg.dt
     device  = cfg.device
     steps   = cfg.steps
@@ -358,14 +400,14 @@ def test(cfg: DictConfig):
     cfg = OmegaConf.create(cfg_dict)
 
     # ── load policy ──────────────────────────────────────────────────────
-    policy = MLP(
-        layer_sizes=cfg.env.nn,
-        activation=nn.ReLU,
-        output_activation=nn.Sigmoid(),
-        output_bias_init=0.0,
-    ).to(device)
+    policy = MLP(layer_sizes=cfg.env.policy, activation=nn.ReLU, 
+                 output_activation=nn.Sigmoid(), output_bias_init=0.0).to(device)
     policy.load_state_dict(torch.load(policy_path, map_location=device))
     policy.eval()
+
+    encoder = MLP(layer_sizes=cfg.env.encoder, activation=nn.ReLU).to(device)
+    encoder.load_state_dict(torch.load(encoder_path, map_location=device))
+    encoder.eval()
     print(f"Loaded policy from: {policy_path}")
 
 
@@ -399,7 +441,18 @@ def test(cfg: DictConfig):
     quadrotor = QuadrotorDynamics(cfg)
     quadrotor.set_parameters(randomized_params)
 
-    print(randomized_params)
+    p = quadrotor.get_parameters()
+    print(p)
+    scalars = torch.stack(
+        (p["mass"],
+        p["arm_length"],
+        p["arm_angle"],
+        p["km"]),
+        dim=1
+    )
+    e = torch.cat((scalars, p["inertia"]), dim=1)
+    z = encoder(e)
+    print(z)
 
     hover_thrust = quadrotor.get_srt_hover()   # per rotor
     controller   = SRTController(hover_thrust, hover_ratio=cfg.env.max_mass_norm_thrust)
@@ -421,6 +474,7 @@ def test(cfg: DictConfig):
             pos_ref, vel_ref, acc_ref = get_ref(t)
 
             obs     = get_observation(states, pos_ref, vel_ref, acc_ref)
+            obs     = torch.cat([obs, z], dim=1)
             raw     = policy(obs)
             actions = controller(raw)   # mapping the policy outputs \in [0,1] to motor thrust
             states  = quadrotor.step(state=states, action=actions)

@@ -246,8 +246,8 @@ class QuadrotorDynamics:
             'mass':       self.m,
             'arm_length': self.arm_length,
             'arm_angle':  self.arm_angle,
-            'inertia':    self.J,
             'km':         self.km,
+            'inertia':    self.J,
         }
     
 

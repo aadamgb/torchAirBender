@@ -2,6 +2,7 @@ import torch
 from omegaconf import DictConfig
 
 from dynamics.quadrotor_dynamics import QuadrotorDynamics
+from controller.srt_controller import SRTController
 from utils.randomize import randomize_parameters
 from utils.replay import BaseRenderer
 
@@ -31,14 +32,22 @@ def train(cfg: DictConfig):
     )
 
     quadrotor.set_parameters(randomized_params)
+    print(randomized_params)
 
     states = torch.zeros((num_envs, 13), device=device)
     states[:, 2] = 0.5
     states[:, 6] = 1.0  # seting quaternion w to 1 
     
     # Get hover thrust
-    srt_hover = (quadrotor.get_srt_hover())
-    actions = srt_hover.unsqueeze(1).expand(-1, 4)
+    srt_hover = quadrotor.get_srt_hover()
+    controller   = SRTController(srt_hover, hover_ratio=cfg.env.max_mass_norm_thrust)
+    actions_raw = torch.full((num_envs, 4), 0.45, device=device)
+
+    print(actions_raw)
+
+    actions = controller(actions_raw)
+
+    print(actions)
 
     # Store the trajectory
     traj_env0 = torch.empty((steps, 17), device=device)

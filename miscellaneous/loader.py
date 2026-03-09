@@ -22,7 +22,7 @@ def load_gates_from_yaml(path: str) -> tuple[np.ndarray, np.ndarray]:
 
 
 
-def load_trajectory(path: str, steps: int, device) -> dict:
+def load_TOGT(path: str, steps: int, device) -> dict:
     """
     Loads a trajectory CSV and returns tensors ready for use in test().
 
@@ -43,3 +43,31 @@ def load_trajectory(path: str, steps: int, device) -> dict:
     dt = float(df["t"].iloc[1] - df["t"].iloc[0])
 
     return {"pos": pos, "vel": vel, "acc": acc, "dt": dt}
+
+
+def load_LOL(path: str, steps: int, device, dt: float = 0.001) -> dict:
+    """
+    Loads a headerless LOL trajectory CSV and returns tensors ready for use in test().
+
+    Format (no header): t, x, y, z, vx, vy, vz, ax, ay, az
+
+    Args:
+        dt : desired timestep. If larger than the native dt, rows are subsampled.
+             e.g. native dt=0.001, pass dt=0.01 → every 10th row is kept.
+    """
+    df = pd.read_csv(path, header=None, names=["t", "x", "y", "z", "vx", "vy", "vz", "ax", "ay", "az"])
+
+    native_dt = float(df["t"].iloc[1] - df["t"].iloc[0])
+    stride    = max(1, round(dt / native_dt))
+    df        = df.iloc[::stride].reset_index(drop=True)
+
+    assert len(df) >= steps, f"Trajectory too short after subsampling: {len(df)} rows < {steps} steps"
+
+    pos = torch.tensor(df[["x",  "y",  "z" ]].values[:steps], dtype=torch.float32, device=device)
+    vel = torch.tensor(df[["vx", "vy", "vz"]].values[:steps], dtype=torch.float32, device=device)
+    acc = torch.tensor(df[["ax", "ay", "az"]].values[:steps], dtype=torch.float32, device=device)
+
+    actual_dt = native_dt * stride
+    print(f"[load_LOL] native_dt={native_dt:.4f}s  stride={stride}  → dt={actual_dt:.4f}s  rows={len(df)}")
+
+    return {"pos": pos, "vel": vel, "acc": acc, "dt": actual_dt}

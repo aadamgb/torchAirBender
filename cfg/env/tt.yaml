@@ -1,0 +1,25 @@
+name: trajectory_tracking
+abbr: tt
+
+# nn: [16, 128, 128, 4]
+nn: [16, 64, 64, 64, 4]
+lr: 1e-3
+
+
+loss_weights:
+  pos: 1.5
+  vel: 1.0
+  att: 0.5
+  body_rates: 0.1
+
+
+traj:
+  num_harmonics: 3  # must be integer
+  z_offset: 2.0
+  A: 1.0
+  w: 0.5
+  phi: 1.0
+
+max_dist_to_target: 4.0
+
+max_mass_norm_thrust: 3.0

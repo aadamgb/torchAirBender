@@ -1,0 +1,23 @@
+name: TT_LOL
+
+nn: [16, 128, 128, 4]
+# nn: [16, 64, 64, 64, 4]
+lr: 1e-3
+
+loss_weights:
+  pos: 1.0
+  vel: 0.0
+  att: 0.0
+  body_rates: 0.1
+
+
+traj:
+  path: "/home/adame/torchAirBender/miscellaneous/trajectories/LOL/pmm_hypotrochoid_nodrag_3.5g.csv"
+  num_harmonics: 2  # must be integer
+  z_offset: 2.0
+  A: 1.0
+  w: 1.0
+  phi: 2.0
+
+max_dist_to_target: 5.0
+

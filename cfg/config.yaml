@@ -2,7 +2,6 @@ defaults:
   - env: hover
   - dynamics: quadrotor
   - renderer: replay
-  # - controller: srt
   - _self_
 
 
@@ -11,9 +10,9 @@ device: "cuda"
 dt: 0.01
 
 
-num_envs: 2048
-episodes: 300
-steps: 823
+num_envs: 1024
+episodes: 20
+steps: 800
 
 truncation: 50
 

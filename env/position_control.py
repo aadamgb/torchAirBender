@@ -31,11 +31,11 @@ def reset(
 
     # ------------ Randomize initial position -----------
     states = torch.zeros((num_envs, 13), device=device)
-    states[:, :3]   = _sample_in_cube(num_envs, cfg.env.target_boundary, device)
+    states[:, :3]   = _sample_in_cube(num_envs, cfg.env.boundary, device)
     states[:, 6] = 1.0  # seting quaternion w to 1 (FIXED)
 
     # ----------- Randomize target positon --------------
-    targets = _sample_in_cube(num_envs, cfg.env.target_boundary, device)
+    targets = _sample_in_cube(num_envs, cfg.env.boundary, device)
 
     # ----------- Randomize drone params --------------
     params = randomize_parameters(
@@ -61,11 +61,11 @@ def reset_terminated(
     device = states.device
 
     new_states        = torch.zeros((n, 13), device=device)
-    new_states[:, :3] = _sample_in_cube(n, cfg.env.target_boundary, device)
+    new_states[:, :3] = _sample_in_cube(n, cfg.env.boundary, device)
     new_states[:, 6]  = 1.0
 
     states[idx]  = new_states
-    targets[idx] = _sample_in_cube(n, cfg.env.target_boundary, device)
+    targets[idx] = _sample_in_cube(n, cfg.env.boundary, device)
 
     return states, targets
 
@@ -184,13 +184,13 @@ def train(cfg: DictConfig):
 
             # --- termination: out of bounds ---
             pos = states[:, 0:3]                          # (N, 3)
-            half = cfg.env.target_boundary / 2.0
+            half = cfg.env.boundary / 2.0
 
             out_of_bounds = (
                 (pos[:, 0].abs() > half) |                # x
                 (pos[:, 1].abs() > half) |                # y
                 (pos[:, 2] < 0) |                         # z below ground
-                (pos[:, 2] > cfg.env.target_boundary)     # z above ceiling
+                (pos[:, 2] > cfg.env.boundary)     # z above ceiling
             )                                             # (N,) bool
 
             terminated = out_of_bounds
@@ -236,6 +236,7 @@ def train(cfg: DictConfig):
 
 
     print(f"Total training time: {time.time() - start:.2f}s")
+
     # Save the final policy
     torch.save(policy.state_dict(), os.path.join(output_dir, f"position_control_final.pt"))
 
@@ -243,7 +244,7 @@ def train(cfg: DictConfig):
     # Replay the trajectory
     renderer = PositionControlRenderer(
         target_pos=targets[0].detach().cpu().numpy(),
-        boundary=cfg.env.target_boundary,
+        boundary=cfg.env.boundary,
         trajectory=traj_env0.detach().cpu().numpy(),  # (T, 13)
         arm_length=float(randomized_params.arm_length[0].cpu()),
         arm_angle=float(randomized_params.arm_angle[0].cpu()),
@@ -259,8 +260,7 @@ def train(cfg: DictConfig):
 #==============================================================
 
 def test(cfg: DictConfig):
-    policy_path = "/home/adame/torchAirBender/outputs/policies/position_control_best.pt"
-    # policy_path = "/home/adame/torchAirBender/outputs/policies/BEST.pt"
+    policy_path = "/home/adame/torchAirBender/outputs/policies/PC/position_control_best.pt"
     dt       = cfg.dt
     device   = cfg.device
     steps    = 2000
@@ -317,13 +317,13 @@ def test(cfg: DictConfig):
 
             distances  = torch.linalg.norm(targets - states[:, 0:3], dim=-1)
             pos = states[:, 0:3]                          # (N, 3)
-            half = cfg.env.target_boundary / 1.5
+            half = cfg.env.boundary / 1.5
 
             out_of_bounds = (
                 (pos[:, 0].abs() > half) |                # x
                 (pos[:, 1].abs() > half) |                # y
                 (pos[:, 2] < 0) |                         # z below ground
-                (pos[:, 2] > cfg.env.target_boundary)     # z above ceiling
+                (pos[:, 2] > cfg.env.boundary)     # z above ceiling
             )                                             # (N,) bool
 
             terminated = out_of_bounds
@@ -345,7 +345,7 @@ def test(cfg: DictConfig):
     # ── replay ───────────────────────────────────────────────────────────────
     renderer = PositionControlRenderer(
         target_pos=traj[:, 17:20].detach().cpu().numpy(),
-        boundary=cfg.env.target_boundary,
+        boundary=cfg.env.boundary,
         trajectory=traj.detach().cpu().numpy(),
         arm_length=float(randomized_params.arm_length[0].cpu()),
         arm_angle=float(randomized_params.arm_angle[0].cpu()),

@@ -186,7 +186,7 @@ class BaseRenderer:
                         angle=angle,
                     )                                        # (3, 3)
 
-        ti.init(arch=ti.cuda)
+        ti.init(arch=ti.cpu)
 
         self._build_ground()
         self._build_world_axes()

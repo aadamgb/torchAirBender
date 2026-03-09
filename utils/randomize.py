@@ -12,8 +12,8 @@ class QuadrotorParams(NamedTuple):
     mass: Tensor        # (N,)
     arm_length: Tensor  # (N,)
     arm_angle: Tensor  # (N,)
-    J: Tensor           # (N, 3)
     km: Tensor           # (N, )
+    J: Tensor           # (N, 3)
     # kf: Tensor          # (N,)
     # km: Tensor          # (N,)
     # motor_tau: Tensor   # (N,)
@@ -44,13 +44,14 @@ def randomize_parameters(
     ) * (cfg.sf.max - cfg.sf.min) + cfg.sf.min
 
     # ------------------------------------------------------------------
-    # 2. Arm length and angle (linear in c)
+    # 2. Arm length (linear in c)
     # ------------------------------------------------------------------
     l_min, l_max = cfg.arm_length.min, cfg.arm_length.max
     l = c * (l_max - l_min) + l_min
 
-    alpha_min, alpha_max = cfg.arm_angle.min, cfg.arm_angle.max
-    alpha = c * (alpha_max - alpha_min) + alpha_min
+    alpha = torch.full(
+        (num_envs,), cfg.arm_angle.nominal, device=device, dtype=dtype
+    ) # alpha does not scale, only add noise
 
     # ------------------------------------------------------------------
     # 3. Mass (scales as l^3)
@@ -97,16 +98,29 @@ def randomize_parameters(
     #         torch.rand_like(x, generator=generator) * 2.0 - 1.0
     #     ) * cfg.nf
     #     return x * (1.0 + noise)
+    # def add_noise(x):
+    #     noise = (
+    #         torch.rand(x.shape, device=x.device, dtype=x.dtype, generator=generator) * 2.0 - 1.0
+    #     ) * cfg.nf
+    #     return x * (1.0 + noise)
+    # def add_noise(x):
+    #     return x * (1 + torch.empty(num_envs, device=device)
+    #                 .uniform_(-cfg.nf, cfg.nf))
     def add_noise(x):
-        noise = (
-            torch.rand(x.shape, device=x.device, dtype=x.dtype, generator=generator) * 2.0 - 1.0
-        ) * cfg.nf
-        return x * (1.0 + noise)
+        noise = torch.empty_like(x).uniform_(-cfg.nf, cfg.nf)
+        return x * (1 + noise)
+    
+    def add_noise_J(J):
+        noise = torch.empty_like(J)
+        noise[:,0].uniform_(-cfg.nf, cfg.nf)   # Jx
+        noise[:,1].uniform_(-cfg.nf, cfg.nf)   # Jy
+        noise[:,2].uniform_(-cfg.nf, cfg.nf)    # Jz usually larger
+        return J * (1 + noise)
 
     mass = add_noise(mass)
     l = add_noise(l)
-    alpha = add_noise(alpha)
-    J = add_noise(J)
+    # alpha = add_noise(alpha)
+    J = add_noise_J(J)  # TODO: Add elemntwise noise
     # kf = add_noise(kf)
     km = add_noise(km)
     # motor_tau = add_noise(motor_tau)
@@ -114,11 +128,11 @@ def randomize_parameters(
 
     return QuadrotorParams(
         mass=mass,
-        J=J,
         arm_length=l,
         arm_angle=alpha,
         # kf=kf,
         km=km,
+        J=J,
         # motor_tau=motor_tau,
         # C_D=C_D,
     )

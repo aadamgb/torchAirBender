@@ -1,0 +1,29 @@
+name: path_progress
+abbr: pp
+
+encoder: [7, 16, 16, 3]
+policy: [19, 128, 128, 4]
+# policy: [16, 128, 128, 4]
+
+lr: 1e-3
+
+
+loss_weights:
+  pos: 2.0
+  vel: 1.0
+  att: 0.1
+  body_rates: 0.1
+
+
+traj:
+  num_harmonics: 3  # must be integer
+  z_offset: 2.0
+  A: 1.0
+  w: 1.0
+  phi: 2.0
+
+max_dist_to_target: 4.0
+
+max_mass_norm_thrust: 2.0
+kp_rate: 1.0
+w_max: 5.0

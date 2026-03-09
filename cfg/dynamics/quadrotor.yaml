@@ -5,19 +5,12 @@ name: quadrotor
 # ============================
 
 # Scale factor — drives correlated parameter sampling across envs
-# sf:
-#   nominal: 0.5
-#   min: 0.0
-#   max: 1.0
 sf:
   nominal: 0.5
-  min: 0.5
-  max: 0.5
-
-
+  min: 0.0
+  max: 1.0
 # Noise factor applied on top of correlated scaling
 nf: 0.0 #0.2 
-
 
 # -----------------------------
 # Phsical Params
@@ -29,14 +22,9 @@ arm_length:
   min: 0.10
   max: 0.25
 
+# Arm angle [deg] (X-config)
 arm_angle: 
-  nominal: 45.0 # [deg]  (X-config)
-  min: 45.0 
-  max: 45.0 
-# arm_angle: 
-#   nominal: 0.0 # [deg]  (X-config)
-#   min: 0.0 
-#   max: 0.0 
+  nominal: 45.0 
 
 # Mass [kg]
 mass:
@@ -67,5 +55,5 @@ km:
 
 
 
-max_thrust: 3.0   #per rotor
-# max_thrust: 2.0
+max_thrust: 3.0   # racing
+# max_thrust: 2.5   # TT

@@ -12,9 +12,9 @@ from utils.replay import RacingRenderer
 from utils.math import quat_to_rotmat
 
 from dynamics.quadrotor_dynamics import QuadrotorDynamics
-from controller.srt_controller import SRTController
+from controller.srt_controller import SRTController_old
 
-from miscellaneous.loader import load_gates_from_yaml, load_trajectory
+from miscellaneous.loader import load_gates_from_yaml, load_TOGT
 
 
 # ==============================================================
@@ -88,7 +88,7 @@ def build_get_ref(cfg: DictConfig, device, dt: float, speed_scale=1.0 ):
     """
     if cfg.env.load_traj == True:
         # print("Loading trajectory from CSV!")
-        loaded = load_trajectory(cfg.env.test_traj, cfg.steps, device)
+        loaded = load_TOGT(cfg.env.test_traj, cfg.steps, device)
 
         def get_ref(t: int):
             # map t -> scaled index into the trajectory
@@ -302,7 +302,7 @@ def train(cfg: DictConfig):
         map_location=device,
     ))
 
-    controller = SRTController(cfg)
+    controller = SRTController_old(cfg)
     optimizer  = torch.optim.Adam(policy.parameters(), lr=cfg.env.lr)
 
     best_loss = float("inf")
@@ -395,9 +395,7 @@ def train(cfg: DictConfig):
 # ==============================================================
 
 def test(cfg: DictConfig):
-    policy_path = "/home/adame/torchAirBender/outputs/policies/racing/show2rob.pt"
-    policy_path = "/home/adame/torchAirBender/outputs/policies/racing/racing_at_0.87.pt"
-    # policy_path = "/home/adame/torchAirBender/outputs/las_mejores/trajectory_tracking_w_2.75.pt"
+    policy_path = "/home/adame/torchAirBender/outputs/las_mejores/racing/racing_at_0.87.pt"
     dt     = cfg.dt
     device = cfg.device
     steps  = cfg.steps
@@ -422,7 +420,7 @@ def test(cfg: DictConfig):
     get_ref, _ = build_get_ref(cfg, device, dt, speed_scale=0.87)
 
     # init
-    controller        = SRTController(cfg)
+    controller        = SRTController_old(cfg)
     pos0, vel0, acc0  = get_ref(0)
     states, randomized_params = reset(cfg, pos0, vel0, acc0)
 
