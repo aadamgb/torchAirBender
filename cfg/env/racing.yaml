@@ -1,4 +1,5 @@
 name: racing
+abbr: racing
 
 # nn: [16, 128, 128, 128, 4]
 # nn: [16, 64, 64, 64, 4]

@@ -13,7 +13,7 @@ from utils.replay import TrajectoryTrackingRenderer
 from utils.math import quat_to_rotmat
 
 from dynamics.quadrotor_dynamics import QuadrotorDynamics
-from controller.srt_controller import  GeometricController #CTBRController#, SRTController
+from controller.srt_controller import CTBRController#, SRTController
 
 
 def generate_trajectory_params(
@@ -118,6 +118,7 @@ def reset(
     states[:, 0:3]  = pos0.detach()
     states[:, 3:6]  = vel0.detach()                                # match target velocity
     states[:, 6:10] = acc_to_quat(acc0.detach())   
+    # states[:, 6]    = 1.0                                          # quaternion w = 1
 
     params = randomize_parameters(cfg.dynamics, num_envs, device)
 
@@ -220,19 +221,17 @@ def train(cfg: DictConfig):
     quadrotor = QuadrotorDynamics(cfg)
 
     hover_thrust = quadrotor.get_srt_hover()
-    controller   = GeometricController(
+    controller   = CTBRController(
         hover_thrust = hover_thrust * 4.0,
         alloc_matrix = quadrotor._alloc_matrix,
         J            = quadrotor.J,
-        m            = quadrotor.m,
-        hover_ratio  = cfg.env.max_TTWR,
+        dt           = dt,
+        hover_ratio  = cfg.env.max_mass_norm_thrust,
+        w_max        = cfg.env.w_max,       
+        kp_rate      = cfg.env.kp_rate,     
     )
     policy = MLP(layer_sizes=cfg.env.policy, activation=nn.ReLU, 
-                 output_activation=nn.Tanh(), output_bias_init=0.0).to(device)
-    
-    # policy = MLP(layer_sizes=cfg.env.policy, activation=nn.ReLU, 
-    #              output_bias_init=0.0).to(device)
-    
+                 output_activation=nn.Sigmoid(), output_bias_init=0.0).to(device)
     encoder = MLP(layer_sizes=cfg.env.encoder, activation=nn.ReLU).to(device)
     # decoder = MLP(layer_sizes=cfg.env.encoder[::-1], activation=nn.ReLU).to(device)
 
@@ -247,14 +246,13 @@ def train(cfg: DictConfig):
         # --- episode reset ---
         states, randomized_params = reset(cfg, traj_params)
         quadrotor.set_parameters(randomized_params)
-        # print(quadrotor.arm_angle[0])
+        print(quadrotor.arm_angle[0])
 
         hover_thrust = quadrotor.get_srt_hover() * 4.0  # per rotor
         controller.update_parameters(
             hover_thrust = hover_thrust,
             alloc_matrix = quadrotor._alloc_matrix,
             J            = quadrotor.J,
-            m            = quadrotor.m
         )
 
         ep_loss    = 0.0
@@ -297,9 +295,8 @@ def train(cfg: DictConfig):
             obs     = get_observation(states, pos_ref, vel_ref, acc_ref)
             obs = torch.cat([obs, z], dim=1)  # add the ecoded env_params
             raw     = policy(obs)
-            actions, wrench = controller(raw, states, pos_ref, vel_ref, acc_ref)
-            # print(raw[0]) if t == steps - 1 else None
-            # print(wrench[0]) if t == steps - 1 else None
+            actions, w = controller(raw, states[:, 10:13])
+            # print(w[0]) if t == steps - 1 else None
             states  = quadrotor.step(state=states, action=actions)
 
             # --- termination ---
@@ -459,12 +456,12 @@ def test(cfg: DictConfig):
     # print(z)
 
     hover_thrust = quadrotor.get_srt_hover()   # per rotor
-    controller   = GeometricController(
+    controller   = CTBRController(
         hover_thrust = hover_thrust * 4.0,
         alloc_matrix = quadrotor._alloc_matrix,
         J            = quadrotor.J,
         dt           = dt,
-        hover_ratio  = cfg.env.max_TTWR,
+        hover_ratio  = cfg.env.max_mass_norm_thrust,
         w_max        = cfg.env.w_max,       
         kp_rate      = cfg.env.kp_rate,     
     )

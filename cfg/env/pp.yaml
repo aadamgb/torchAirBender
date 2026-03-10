@@ -3,7 +3,8 @@ abbr: pp
 
 encoder: [7, 16, 16, 3]
 policy: [19, 128, 128, 4]
-# policy: [16, 128, 128, 4]
+
+# policy: [19, 128, 128, 5] # for the geometric controller collective thrust + quaternions = 5
 
 lr: 1e-3
 
@@ -22,8 +23,10 @@ traj:
   w: 1.0
   phi: 2.0
 
-max_dist_to_target: 4.0
+max_dist_to_target: 10.0
 
-max_mass_norm_thrust: 2.0
-kp_rate: 1.0
-w_max: 5.0
+max_TTWR: 2.0
+
+# # For the CTBR controller
+# kp_rate: 1.0
+# w_max: 5.0
