@@ -119,7 +119,7 @@ def randomize_parameters(
 
     mass = add_noise(mass)
     l = add_noise(l)
-    # alpha = add_noise(alpha)
+    alpha = add_noise(alpha)
     J = add_noise_J(J)  # TODO: Add elemntwise noise
     # kf = add_noise(kf)
     km = add_noise(km)

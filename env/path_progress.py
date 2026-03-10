@@ -246,6 +246,7 @@ def train(cfg: DictConfig):
         # --- episode reset ---
         states, randomized_params = reset(cfg, traj_params)
         quadrotor.set_parameters(randomized_params)
+        print(quadrotor.arm_angle[0])
 
         hover_thrust = quadrotor.get_srt_hover() * 4.0  # per rotor
         controller.update_parameters(
@@ -295,7 +296,7 @@ def train(cfg: DictConfig):
             obs = torch.cat([obs, z], dim=1)  # add the ecoded env_params
             raw     = policy(obs)
             actions, w = controller(raw, states[:, 10:13])
-            print(w[0]) if t == steps - 1 else None
+            # print(w[0]) if t == steps - 1 else None
             states  = quadrotor.step(state=states, action=actions)
 
             # --- termination ---
@@ -331,7 +332,7 @@ def train(cfg: DictConfig):
         rmse = torch.sqrt(sq_error_sum / num_samples).item()
         print(f"  Episode {ep+1:>4}/{episodes}  |  Avg Loss: {avg_ep_loss:.4f}  |  RMSE: {rmse:.3f} m")
 
-        rmse_threshold = 0.2
+        rmse_threshold = 0.15
         if rmse < rmse_threshold:
             print(f"RSME below {rmse_threshold} m increasing w = {cfg.env.traj.w} by 0.25 🔥")
             torch.save(policy.state_dict(), os.path.join(output_dir, f"{cfg.env.name}_w_{cfg.env.traj.w}.pt"))
@@ -388,8 +389,8 @@ def load_trajectory(path: str, steps: int, device) -> dict:
 
 
 def test(cfg: DictConfig):
-    policy_path = "/home/adame/torchAirBender/outputs/policies/PP/path_progress_w_1.75.pt"
-    encoder_path = "/home/adame/torchAirBender/outputs/policies/PP/encoder_pp_w_1.75.pt"
+    policy_path = "/home/adame/torchAirBender/outputs/policies/PP/path_progress_w_2.0.pt"
+    encoder_path = "/home/adame/torchAirBender/outputs/policies/PP/encoder_pp_w_2.0.pt"
     dt      = cfg.dt
     device  = cfg.device
     steps   = cfg.steps
@@ -442,7 +443,7 @@ def test(cfg: DictConfig):
     quadrotor.set_parameters(randomized_params)
 
     p = quadrotor.get_parameters()
-    print(p)
+    # print(p)
     scalars = torch.stack(
         (p["mass"],
         p["arm_length"],
@@ -452,10 +453,18 @@ def test(cfg: DictConfig):
     )
     e = torch.cat((scalars, p["inertia"]), dim=1)
     z = encoder(e)
-    print(z)
+    # print(z)
 
     hover_thrust = quadrotor.get_srt_hover()   # per rotor
-    controller   = SRTController(hover_thrust, hover_ratio=cfg.env.max_mass_norm_thrust)
+    controller   = CTBRController(
+        hover_thrust = hover_thrust * 4.0,
+        alloc_matrix = quadrotor._alloc_matrix,
+        J            = quadrotor.J,
+        dt           = dt,
+        hover_ratio  = cfg.env.max_mass_norm_thrust,
+        w_max        = cfg.env.w_max,       
+        kp_rate      = cfg.env.kp_rate,     
+    )
 
     traj = torch.empty((steps, 20), device=device)  # 13 state + 4 actions + 3 ref pos
 
@@ -476,7 +485,7 @@ def test(cfg: DictConfig):
             obs     = get_observation(states, pos_ref, vel_ref, acc_ref)
             obs     = torch.cat([obs, z], dim=1)
             raw     = policy(obs)
-            actions = controller(raw)   # mapping the policy outputs \in [0,1] to motor thrust
+            actions, w = controller(raw, states[:, 10:13])   # mapping the policy outputs \in [0,1] to motor thrust
             states  = quadrotor.step(state=states, action=actions)
 
             dist    = torch.linalg.norm(pos_ref - states[:, 0:3], dim=-1)
@@ -488,15 +497,14 @@ def test(cfg: DictConfig):
             total_loss += step_loss.item()
 
             traj[t] = torch.cat([states[0], actions[0], pos_ref[0]], dim=0)
+            # traj[t] = torch.cat([states[0], w[0], pos_ref[0]], dim=0)
 
             if too_far[0]:
                 print(f"  !! Terminated at step {t+1} — dist: {dist[0]:.3f}")
                 states = reset_terminated(states, too_far, pos_ref, vel_ref, acc_ref)
 
 
-        print(f"\n  Avg Loss:   {total_loss / steps:.4f}")
-        print(f"  RMSE Pos:   { (sq_error_sum / steps) ** 0.5:.4f} m")
-
+        print(f"\n  Avg Loss:   {total_loss / steps:.4f} | RMSE Pos:   { (sq_error_sum / steps) ** 0.5:.4f} m")
     # ── replay ───────────────────────────────────────────────────────────
     renderer = TrajectoryTrackingRenderer(
         ref_trajectory=traj[:, 17:20].cpu().numpy(),

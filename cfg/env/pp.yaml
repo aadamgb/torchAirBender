@@ -11,7 +11,7 @@ lr: 1e-3
 loss_weights:
   pos: 2.0
   vel: 1.0
-  att: 0.1
+  att: 0.2
   body_rates: 0.1
 
 
