@@ -10,7 +10,7 @@ from utils.randomize import randomize_parameters
 from utils.replay import PositionControlRenderer
 
 from dynamics.quadrotor_dynamics import QuadrotorDynamics
-from controller.srt_controller import SRTController
+from controller.controllers import SRTController
 
 
 def _sample_in_cube(n: int, boundary: float, device) -> Tensor:

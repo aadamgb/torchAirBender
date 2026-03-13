@@ -205,8 +205,8 @@ class BaseRenderer:
     # ------------------------------------------------------------------
 
     def _build_ground(self):
-        grid_n    = 10
-        grid_half = 10
+        grid_n    = 20
+        grid_half = 40
         # edge      = 2.0 * grid_half / (grid_n - 1)
 
         self._grid_verts = ti.Vector.field(3, dtype=ti.f32, shape=4 * grid_n)
@@ -398,8 +398,8 @@ class BaseRenderer:
                 minus_y /= np.linalg.norm(minus_y) + 1e-12
 
                 camera.position(cx, cy, cz)
-                # camera.lookat(cx + fwd[0], cy + fwd[1], cz + fwd[2])
-                camera.lookat(cx + minus_y[0], cy + minus_y[1], cz + minus_y[2])
+                camera.lookat(cx + fwd[0], cy + fwd[1], cz + fwd[2])
+                # camera.lookat(cx + minus_y[0], cy + minus_y[1], cz + minus_y[2])
                 camera.up(float(up[0]), float(up[1]), float(up[2]))
             else:
                 if prev_fpv_mode:   # just exited FPV — restore saved pose
@@ -594,7 +594,7 @@ class RacingRenderer(TrajectoryTrackingRenderer):
         self,
         gates_position: np.ndarray,
         gates_rpy:      np.ndarray,
-        gate_mesh_path: str,
+        gate_mesh_path: str = '/home/adame/torchAirBender/miscellaneous/gate.obj',
         gate_scale:     float = 1.0,
         gate_color:     tuple = (0.25, 0.0, 0.5),
         ref_trajectory: np.ndarray = None,

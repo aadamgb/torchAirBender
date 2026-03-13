@@ -12,7 +12,7 @@ from utils.replay import RacingRenderer
 from utils.math import quat_to_rotmat
 
 from dynamics.quadrotor_dynamics import QuadrotorDynamics
-from controller.srt_controller import SRTController_old
+from controller.controllers import SRTController_old
 
 from miscellaneous.loader import load_gates_from_yaml, load_TOGT
 

@@ -2,7 +2,7 @@ name: geometric
 abbr: geo
 
 encoder: [7, 16, 16, 3]
-policy: [19, 128, 128, 4]
+policy: [21, 128, 128, 5]
 
 # policy: [19, 128, 128, 5] # for the geometric controller collective thrust + quaternions = 5
 
@@ -12,7 +12,7 @@ lr: 1e-3
 loss_weights:
   pos: 2.0
   vel: 1.0
-  att: 0.2
+  jerk: 0.2
   body_rates: 0.1
 
 

@@ -34,61 +34,6 @@ def _map_TTWR(
     return torch.where(c <= 0.5, lower, upper).squeeze(1)   # (N,)
 
 
-@torch.jit.script
-def _vee(S: Tensor) -> Tensor:
-    """
-    Vee operator — extracts the 3-vector from a (B, 3, 3) skew-symmetric matrix.
-
-        S = [  0   -v2   v1 ]
-            [  v2   0   -v0 ]
-            [ -v1   v0   0  ]
-    """
-    return torch.stack([S[..., 2, 1], S[..., 0, 2], S[..., 1, 0]], dim=-1)
-
-
-@torch.jit.script
-def _attitude_error(R: Tensor, R_des: Tensor) -> Tensor:
-    """
-    Geometric attitude error on SO(3) — Lee et al. (2010), eq. (10).
-
-        e_R = 0.5 * vee( R_des^T R  -  R^T R_des )
-
-    Args:
-        R     : (B, 3, 3)  current rotation matrix
-        R_des : (B, 3, 3)  desired rotation matrix
-
-    Returns:
-        e_R : (B, 3)
-    """
-    Rt_Rdes  = torch.bmm(R.transpose(-1, -2), R_des)
-    Rdes_Rt  = torch.bmm(R_des.transpose(-1, -2), R)
-    return _vee(Rdes_Rt - Rt_Rdes) * 0.5
-
-
-@torch.jit.script
-def _geometric_torques(
-    R:     Tensor,   # (B, 3, 3)
-    R_des: Tensor,   # (B, 3, 3)
-    w:     Tensor,   # (B, 3)
-    w_des: Tensor,   # (B, 3)
-    J:     Tensor,   # (N, 3)
-    kR:    float,
-    kw:    float,
-) -> Tensor:
-    """
-    SO(3) geometric PD torque law — Lee et al. (2010), eq. (15).
-
-        tau = -kR * e_R  -  kw * e_w  +  w × (J w)
-
-    The gyroscopic term w × Jw cancels the Coriolis effect so
-    the PD gains don't need to fight it.
-    """
-    e_R  = _attitude_error(R, R_des)
-    e_w  = w - w_des
-    gyro = torch.linalg.cross(w, J * w)
-    return -kR * e_R  -  kw * e_w  +  gyro
-
-
 # ===========================================================
 # Base controller
 # ===========================================================
@@ -253,9 +198,9 @@ class CTBRController(BaseController):
 
 
 # ===========================================================
-# Geometric Controller
+# Geometric Controllers
 # ===========================================================
-class GeometricClassic:
+class DFGeometricController:
     # ⚠️ Neglecting Gyroscopic term  Ω × JΩ and  Feed-forward: -J(Ω̂ R^T R_des Ω_des) ⚠️
     def __init__(self, alloc_matrix, m, g=9.81, kp=200.0, kv=20.0, kR=120.81, kw=3.5):
         self.alloc_inv = torch.linalg.pinv(alloc_matrix)
@@ -280,7 +225,8 @@ class GeometricClassic:
         RdTR    = torch.bmm(R_des.transpose(-1, -2), R)
         skew    = RdTR - RdTR.transpose(-1, -2)
         eR      = 0.5 * torch.stack([skew[:, 2, 1], skew[:, 0, 2], skew[:, 1, 0]], dim=-1)
-        eW      = w - torch.bmm(R.transpose(-1, -2), R_des).bmm(torch.zeros_like(w).unsqueeze(-1)).squeeze(-1)
+        # eW      = w - torch.bmm(R.transpose(-1, -2), R_des).bmm(torch.zeros_like(w).unsqueeze(-1)).squeeze(-1)
+        eW      = w #- torch.bmm(R.transpose(-1, -2), R_des).bmm(torch.zeros_like(w).unsqueeze(-1)).squeeze(-1)
 
         Fz      = (A * R[:, :, 2]).sum(dim=-1, keepdim=True)
         tau     = -self.kR * eR - self.kw * eW
@@ -288,22 +234,109 @@ class GeometricClassic:
 
         return torch.bmm(self.alloc_inv, wrench.unsqueeze(-1)).squeeze(-1)
 
+class DFGC:
+    def __init__(self, alloc_matrix, J, m, g=9.81, kp=200.0, kv=20.0, kR=120.81, kw=3.5):
+        self.alloc_inv = torch.linalg.pinv(alloc_matrix)
+        self.J  = J  # (N, 3) diagonal inertia
+        self.m  = m
+        self.g  = g
+        self.kp = kp
+        self.kv = kv
+        self.kR = kR
+        self.kw = kw
 
-class SRTController_old(BaseController):
-    """
-    Minimal controller for the point-mass model.
-    Maps sigmoid policy output -> per-motor thrust [N].
+    def __call__(self, state, p_ref, v_ref, a_ref, b1d, w_des=None):
+        p, v, q, w = state[:, 0:3], state[:, 3:6], state[:, 6:10], state[:, 10:13]
+        R = quat_to_rotmat(q)
 
-    Future extensions:
-        - Motor lag / first-order dynamics
-        - Drag model
-        - RPM -> thrust curve (nonlinear)
-    """
+        e3      = torch.zeros_like(a_ref); e3[:, 2] = 1.0
+        A       = -self.kp * (p - p_ref) - self.kv * (v - v_ref) + self.m * (self.g * e3 + a_ref)
 
-    def __init__(self, cfg: DictConfig):
-        self.max_thrust = cfg.dynamics.max_thrust   
+        b3d     = F.normalize(A, dim=-1)
+        b2d     = F.normalize(torch.linalg.cross(b3d, b1d), dim=-1)
+        R_des   = torch.stack([torch.linalg.cross(b2d, b3d), b2d, b3d], dim=-1)
 
-    def __call__(self, raw: Tensor) -> Tensor:
-        # raw: (N, 4) in range (0, 1) from Sigmoid
-        return raw * self.max_thrust           # (N, 4) in (0, max_thrust)
+        RdTR    = torch.bmm(R_des.transpose(-1, -2), R)
+        skew    = RdTR - RdTR.transpose(-1, -2)
+        eR      = 0.5 * torch.stack([skew[:, 2, 1], skew[:, 0, 2], skew[:, 1, 0]], dim=-1)
+
+        RTRd    = torch.bmm(R.transpose(-1, -2), R_des)
+
+        if w_des is None:
+            w_des = torch.zeros_like(w)
+
+        eW      = w - torch.bmm(RTRd, w_des.unsqueeze(-1)).squeeze(-1)
+
+        # Gyroscopic term  Ω × JΩ
+        Jw      = self.J * w                                            # (N, 3)
+        gyro    = torch.linalg.cross(w, Jw)                            # (N, 3)
+
+        # Feed-forward: Ω × (R^T R_des Ω_des)  — only meaningful if w_des != 0
+        RTRd_wdes = torch.bmm(RTRd, w_des.unsqueeze(-1)).squeeze(-1)   # (N, 3)
+        ff        = torch.linalg.cross(w, self.J * RTRd_wdes)          # (N, 3)
+
+        Fz      = (A * R[:, :, 2]).sum(dim=-1, keepdim=True)
+        tau     = -self.kR * eR - self.kw * eW + gyro - ff
+        wrench  = torch.cat([Fz, tau], dim=-1)
+
+        return torch.bmm(self.alloc_inv, wrench.unsqueeze(-1)).squeeze(-1)
+    
+class AttitudeGeometricController:
+    def __init__(self, allocation_matrix, J, kR=120.81, kw=3.5):
+        self.alloc_inv = torch.linalg.pinv(allocation_matrix)
+        self.J  = J                  # (N, 3)
+        self.kR = kR
+        self.kw = kw
+
+    def update_params(
+        self,
+        allocation_matrix: Tensor | None = None,   # (N, 4, 4)
+        J:                 Tensor | None = None,   # (N, 3)
+        kR:                Tensor | None = None,   # scalar or (N, 1)
+        kw:                Tensor | None = None,   # scalar or (N, 1)
+    ):
+        """
+        Call at the start of each episode to update physical params,
+        and at each step if gain scheduling is active.
         
+        Only updates the params you pass — others stay unchanged.
+        """
+        if allocation_matrix is not None:
+            self.alloc_inv = torch.linalg.pinv(allocation_matrix)
+        if J  is not None:
+            self.J  = J
+        if kR is not None:
+            self.kR = kR
+        if kw is not None:
+            self.kw = kw
+
+    def __call__(self, state, R_des, Fz, w_des=None):
+        q, w = state[:, 6:10], state[:, 10:13]
+        R    = quat_to_rotmat(q)
+
+        RdTR = torch.bmm(R_des.transpose(-1, -2), R)
+        skew = RdTR - RdTR.transpose(-1, -2)
+        eR   = 0.5 * torch.stack([skew[:, 2, 1], skew[:, 0, 2], skew[:, 1, 0]], dim=-1)
+        RTRd = torch.bmm(R.transpose(-1, -2), R_des)
+
+        if w_des is None:
+            w_des = torch.zeros_like(w)
+
+        eW = w - torch.bmm(RTRd, w_des.unsqueeze(-1)).squeeze(-1)
+
+        # broadcast kR, kw to (N, 1) if they are per-env tensors
+        kR = self.kR.unsqueeze(-1) if torch.is_tensor(self.kR) and self.kR.dim() == 1 else self.kR
+        kw = self.kw.unsqueeze(-1) if torch.is_tensor(self.kw) and self.kw.dim() == 1 else self.kw
+
+        # Gyroscopic term  Ω × JΩ
+        Jw   = self.J * w
+        gyro = torch.linalg.cross(w, Jw)
+
+        # Feed-forward: Ω × J(R^T R_des Ω_des)
+        RTRd_wdes = torch.bmm(RTRd, w_des.unsqueeze(-1)).squeeze(-1)
+        ff        = torch.linalg.cross(w, self.J * RTRd_wdes)
+
+        tau    = -kR * eR - kw * eW + gyro - ff
+        wrench = torch.cat([Fz, tau], dim=-1)
+
+        return torch.bmm(self.alloc_inv, wrench.unsqueeze(-1)).squeeze(-1)
