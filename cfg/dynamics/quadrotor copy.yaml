@@ -21,9 +21,9 @@ nf: 0.0 #0.2
 
 # Arm length [m] — primary geometric parameter, correlates mass/inertia
 arm_length:
-  nominal: 0.315
-  min: 0.314
-  max: 0.316
+  nominal: 0.15
+  min: 0.10
+  max: 0.25
 
 # Arm angle [deg] (X-config)
 arm_angle: 
@@ -31,32 +31,32 @@ arm_angle:
 
 # Mass [kg]
 mass:
-  nominal: 4.34
-  min: 4.33
-  max: 4.34
+  nominal: 0.5
+  min: 0.3
+  max: 0.8
 
 # Inertia [kg·m^2] — diagonal elements [Ixx, Iyy, Izz]
 inertia:
   xx:
-    nominal: 0.0820
-    min: 0.0819
-    max: 0.0821
+    nominal: 0.0023
+    min: 0.0010
+    max: 0.0040
   yy:
-    nominal: 0.0845
-    min: 0.0844
-    max: 0.0846
+    nominal: 0.0023
+    min: 0.0010
+    max: 0.0040
   zz:
-    nominal: 0.1377
-    min: 0.1376
-    max: 0.1378
+    nominal: 0.0040
+    min: 0.0020
+    max: 0.0060
 
 # Drag-torque coefficient: tau = km * Fz = km * kf * Omega^2
 km:
-  nominal: 0.000804
-  min: 0.00080
-  max: 0.000808
+  nominal: 0.012
+  min: 0.009
+  max: 0.015
 
 
 
-# max_thrust: 1.0   # racing
+max_thrust: 3.0   # racing
 # max_thrust: 2.5   # TT

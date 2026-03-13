@@ -1,5 +1,5 @@
-name: path_progress
-abbr: pp
+name: geometric
+abbr: geo
 
 encoder: [7, 16, 16, 3]
 policy: [19, 128, 128, 4]
@@ -16,17 +16,17 @@ loss_weights:
   body_rates: 0.1
 
 
-traj:
+rand_fourier:
   num_harmonics: 3  # must be integer
   z_offset: 2.0
   A: 1.0
   w: 1.0
   phi: 2.0
 
+
 max_dist_to_target: 10.0
 
 max_TTWR: 2.0
 
-# # For the CTBR controller
-kp_rate: 1.0
-w_max: 5.0
+track_path: "/home/adame/torchAirBender/miscellaneous/race_tracks/a2rl-s2.yaml"
+trajectory_path: "/home/adame/torchAirBender/miscellaneous/trajectories/TOGT/togt_a2rl-s2.csv"

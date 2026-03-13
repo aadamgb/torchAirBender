@@ -255,154 +255,38 @@ class CTBRController(BaseController):
 # ===========================================================
 # Geometric Controller
 # ===========================================================
+class GeometricClassic:
+    # ⚠️ Neglecting Gyroscopic term  Ω × JΩ and  Feed-forward: -J(Ω̂ R^T R_des Ω_des) ⚠️
+    def __init__(self, alloc_matrix, m, g=9.81, kp=200.0, kv=20.0, kR=120.81, kw=3.5):
+        self.alloc_inv = torch.linalg.pinv(alloc_matrix)
+        self.m  = m
+        self.g  = g
+        self.kp = kp
+        self.kv = kv
+        self.kR = kR
+        self.kw = kw
 
-@torch.jit.script
-def _compute_desired_thrust(
-    p     : Tensor,   # (N, 3)  current position
-    v     : Tensor,   # (N, 3)  current velocity
-    p_ref : Tensor,   # (N, 3)  reference position
-    v_ref : Tensor,   # (N, 3)  reference velocity
-    a_ref : Tensor,   # (N, 3)  reference acceleration
-    R     : Tensor,   # (N, 3, 3)  current rotation matrix
-    m     : Tensor,   # (N,)  mass [kg]
-    g     : float,    # scalar gravity [m/s²]
-    kp    : float,    # position gain
-    kv    : float,    # velocity gain
-    t_min : float,    # collective thrust lower bound [N]
-    t_max : float,    # collective thrust upper bound [N]
-) -> Tensor:
-    """
-    Computes collective thrust from position/velocity errors — Lee et al. SE(3), eq. (17).
+    def __call__(self, state, p_ref, v_ref, a_ref, b1d):
+        p, v, q, w = state[:, 0:3], state[:, 3:6], state[:, 6:10], state[:, 10:13]
+        R = quat_to_rotmat(q)
 
-        F_des = -kp * e_p  -  kv * e_v  +  m*g*e3  +  m*a_ref
-        Fz    = dot(F_des, R[:, :, 2])     ← project onto current body z-axis
+        e3      = torch.zeros_like(a_ref); e3[:, 2] = 1.0
+        A       = -self.kp * (p - p_ref) - self.kv * (v - v_ref) + self.m * (self.g * e3 + a_ref)
 
-    Args:
-        p, v       : (N, 3)    current state
-        p_ref, v_ref, a_ref : (N, 3)  reference trajectory
-        R          : (N, 3, 3) current rotation matrix
-        m          : (N,)      per-env mass
-        g          : float     gravity magnitude
-        kp, kv     : float     position / velocity gains
-        t_min/max  : float     scalar clamp bounds
+        b3d     = F.normalize(A, dim=-1)
+        b2d     = F.normalize(torch.linalg.cross(b3d, b1d), dim=-1)
+        R_des   = torch.stack([torch.linalg.cross(b2d, b3d), b2d, b3d], dim=-1)
 
-    Returns:
-        Fz : (N,)  collective thrust [N]
-    """
-    e3    = torch.zeros_like(p)
-    e3[:, 2] = 1.0
+        RdTR    = torch.bmm(R_des.transpose(-1, -2), R)
+        skew    = RdTR - RdTR.transpose(-1, -2)
+        eR      = 0.5 * torch.stack([skew[:, 2, 1], skew[:, 0, 2], skew[:, 1, 0]], dim=-1)
+        eW      = w - torch.bmm(R.transpose(-1, -2), R_des).bmm(torch.zeros_like(w).unsqueeze(-1)).squeeze(-1)
 
-    F_des = -kp * (p - p_ref) - kv * (v - v_ref) + m.unsqueeze(-1) * g * e3 + m.unsqueeze(-1) * a_ref  # (N, 3)
-    body_z = R[:, :, 2]                                                       # (N, 3)  third column of R
-    Fz     = (F_des * body_z).sum(dim=-1)                                     # (N,)  dot product
+        Fz      = (A * R[:, :, 2]).sum(dim=-1, keepdim=True)
+        tau     = -self.kR * eR - self.kw * eW
+        wrench  = torch.cat([Fz, tau], dim=-1)
 
-    return Fz.clamp(t_min, t_max)
-
-
-class GeometricController(BaseController):
-    """
-    SO(3) Geometric Controller — Lee, Leok, McClamroch, CDC 2010.
-
-    Thrust is computed analytically from position/velocity errors,
-    so the policy only needs to output a desired attitude.
-
-    Policy input:
-        raw : (N, 4)  desired quaternion q_des [w, x, y, z]  (unbounded, will be normalised)
-
-    Controller computes:
-        Fz  — from position/velocity PD law projected onto body z-axis
-        tau — from geometric attitude error on SO(3)
-
-    Args:
-        hover_thrust : (N,)       total hover thrust [N]  (= mg)
-        alloc_matrix : (N, 4, 4)
-        J            : (N, 3)     diagonal inertia [kg·m²]
-        m            : (N,)       mass per env [kg]
-        hover_ratio  : float
-        min_ratio    : float
-        kp           : float      position gain
-        kv           : float      velocity gain
-        kR           : float      attitude error gain
-        kw           : float      angular rate error gain
-    """
-
-    def __init__(
-        self,
-        hover_thrust : Tensor,        # (N,)
-        alloc_matrix : Tensor,        # (N, 4, 4)
-        J            : Tensor,        # (N, 3)
-        m            : Tensor,        # (N,)
-        hover_ratio  : float = 2.0,
-        min_ratio    : float = 0.0,
-        kp           : float = 4.0,
-        kv           : float = 2.0,
-        kR           : float = 0.05,
-        kw           : float = 0.05,
-        g            : float = 9.81,
-    ):
-        super().__init__(hover_thrust, alloc_matrix, hover_ratio, min_ratio)
-        self._J  = J
-        self._m  = m
-        self._kp = kp
-        self._kv = kv
-        self._kR = kR
-        self._kw = kw
-        self._g  = g
-
-    def update_parameters(
-        self,
-        hover_thrust : Tensor,
-        alloc_matrix : Tensor,
-        J            : Tensor,
-        m            : Tensor,
-    ):
-        super().update_parameters(hover_thrust, alloc_matrix)
-        self._J = J
-        self._m = m
-
-    def __call__(
-        self,
-        raw   : Tensor,              # (N, 4)   policy output — desired quaternion
-        state : Tensor,              # (N, 13)  full state [p, v, q, w]
-        p_ref : Tensor,              # (N, 3)   reference position
-        v_ref : Tensor,              # (N, 3)   reference velocity
-        a_ref : Tensor,              # (N, 3)   reference acceleration
-        w_des : Tensor | None = None,
-    ) -> tuple[Tensor, Tensor]:
-        """
-        Args:
-            raw         : (N, 4)   policy output — desired quaternion (unbounded)
-            state       : (N, 13)  full current state
-            p_ref       : (N, 3)   reference position
-            v_ref       : (N, 3)   reference velocity
-            a_ref       : (N, 3)   reference acceleration
-            w_des       : (N, 3)   desired body rates — None = zero (attitude hold)
-
-        Returns:
-            motors : (N, 4)  per-motor thrust [N]
-            wrench : (N, 4)  [Fz, tau_x, tau_y, tau_z]  for logging
-        """
-        p = state[:, 0:3]
-        v = state[:, 3:6]
-        q = state[:, 6:10]
-        w = state[:, 10:13]
-
-        R     = quat_to_rotmat(q)                              # (N, 3, 3)
-        R_des = quat_to_rotmat(F.normalize(raw, dim=-1))       # (N, 3, 3)
-
-        # ── Thrust from position/velocity PD law ─────────────────────────
-        Fz = _compute_desired_thrust(
-            p, v, p_ref, v_ref, a_ref, R,
-            self._m, self._g, self._kp, self._kv,
-            float(self._t_min.min()), float(self._t_max.max()),
-        )
-
-        # ── Torques from geometric attitude error ─────────────────────────
-        w_des_ = torch.zeros_like(w) if w_des is None else w_des
-        tau    = _geometric_torques(R, R_des, w, w_des_, self._J, self._kR, self._kw)
-
-        wrench = torch.cat([Fz.unsqueeze(-1), tau], dim=-1)    # (N, 4)
-        return self._wrench_to_motors(wrench), wrench
+        return torch.bmm(self.alloc_inv, wrench.unsqueeze(-1)).squeeze(-1)
 
 
 class SRTController_old(BaseController):

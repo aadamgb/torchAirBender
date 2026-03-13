@@ -10,7 +10,7 @@ device: "cuda"
 dt: 0.01
 
 
-num_envs: 1024
+num_envs: 1
 episodes: 20
 steps: 800
 

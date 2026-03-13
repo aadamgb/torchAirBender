@@ -7,11 +7,26 @@ from utils.math import *
 
 
 #=====================================================
+# """
+#     Motor layout (top view, Z-up ENU):
+#                     ^ b2
+#                     |
+#            (2) CW   |   (1) CCW
+#                \    |    /
+#                 \   |   /
+#                  \  |  /
+#         ----------- + ----------> b1
+#                  /  |  \
+#                 /   |   \
+#                /    |    \
+#            (3) CCW  |   (4) CW
+#                     |
+# """
 """
     Motor layout (top view, Z-up ENU):
                     ^ b2
                     |
-           (2) CW   |   (1) CCW
+           (1) CW   |   (3) CCW
                \    |    /
                 \   |   /
                  \  |  /
@@ -19,7 +34,7 @@ from utils.math import *
                  /  |  \
                 /   |   \
                /    |    \
-           (3) CCW  |   (4) CW
+           (4) CCW  |   (2) CW
                     |
 """
 #=====================================================
@@ -193,10 +208,15 @@ class QuadrotorDynamics:
         l  = self.arm_length
         km = self.km
 
+        # row0 = torch.ones(len(self.m), 4, device=self.device)
+        # row1 = torch.stack([ l*s,  l*s, -l*s, -l*s], dim=-1)
+        # row2 = torch.stack([-l*c,  l*c,  l*c, -l*c], dim=-1)
+        # row3 = torch.stack([ km,  -km,   km,  -km ], dim=-1)
+
         row0 = torch.ones(len(self.m), 4, device=self.device)
-        row1 = torch.stack([ l*s,  l*s, -l*s, -l*s], dim=-1)
+        row1 = torch.stack([ l*s,  -l*s, l*s, -l*s], dim=-1)
         row2 = torch.stack([-l*c,  l*c,  l*c, -l*c], dim=-1)
-        row3 = torch.stack([ km,  -km,   km,  -km ], dim=-1)
+        row3 = torch.stack([ km,  km,   -km,  -km ], dim=-1)
 
         self._alloc_matrix = torch.stack([row0, row1, row2, row3], dim=1)  # (N, 4, 4)
 

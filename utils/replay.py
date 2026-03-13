@@ -103,7 +103,8 @@ class BaseRenderer:
         self._axis_scale = arm_length * 1.5
 
         # Sphere radius scales with mass: normalised so ~0.5 kg -> ~arm*0.10
-        self._sphere_r = arm_length * 0.08 * (mass / 0.5) ** (1/3) 
+        # self._sphere_r = arm_length * 0.08 * (mass / 0.5) ** (1/3) 
+        self._sphere_r = arm_length * 0.04 * (mass / 0.5) ** (1/3) 
         self._motor_r  = self._sphere_r * 0.75
 
         # Precompute all positions in Taichi coords
@@ -121,13 +122,20 @@ class BaseRenderer:
 
         # Precompute arm tip positions in Taichi coords
         # 4 arms radiating from centre using arm_angle offset
-        s, c = math.sin(math.radians(arm_angle)), math.cos(math.radians(arm_angle))
+        # s, c = math.sin(math.radians(arm_angle)), math.cos(math.radians(arm_angle))
+        s, c = math.sin(arm_angle), math.cos(arm_angle)
+        # arm_dirs_body = arm_length * np.array([
+        #     [ s, -c, 0],   # motor 1
+        #     [ s,  c, 0],   # motor 2
+        #     [-s,  c, 0],   # motor 3
+        #     [-s, -c, 0],   # motor 4
+        # ], dtype=np.float32)                           # (4, 3) body-frame ENU
         arm_dirs_body = arm_length * np.array([
-            [ s, -c, 0],   # motor 1
-            [ s,  c, 0],   # motor 2
-            [-s,  c, 0],   # motor 3
-            [-s, -c, 0],   # motor 4
-        ], dtype=np.float32)                           # (4, 3) body-frame ENU
+            [c, - s, 0],   # motor 1 → Q1
+            [-c,  s, 0],   # motor 2 → Q2
+            [c, s, 0],   # motor 3 → Q3
+            [ -c, -s, 0],   # motor 4 → Q4
+        ])
 
         arm_tips_enu = np.zeros((self._T, 4, 3), dtype=np.float32)
         for t in range(self._T):
@@ -141,7 +149,7 @@ class BaseRenderer:
 
         thrust_tips_enu = np.zeros((self._T, 4, 3), dtype=np.float32)
         amplify = 1000.0   # tune this — higher = more exaggerated differences
-        amplify = 10.0   # tune this — higher = more exaggerated differences
+        amplify = 0.01   # tune this — higher = more exaggerated differences
 
         for t in range(self._T):
             R = quat_to_rotmat(self._traj[t, 6:10])
@@ -197,9 +205,9 @@ class BaseRenderer:
     # ------------------------------------------------------------------
 
     def _build_ground(self):
-        grid_n    = 15
-        grid_half = 15
-        edge      = 2.0 * grid_half / (grid_n - 1)
+        grid_n    = 10
+        grid_half = 10
+        # edge      = 2.0 * grid_half / (grid_n - 1)
 
         self._grid_verts = ti.Vector.field(3, dtype=ti.f32, shape=4 * grid_n)
         gi = 0
@@ -216,29 +224,29 @@ class BaseRenderer:
         self._ground_c = ti.Vector.field(3, dtype=ti.f32, shape=num_cells * 4)
         self._ground_i = ti.field(dtype=ti.i32,           shape=num_cells * 6)
 
-        dark  = ti.Vector([0.125,  0.239,  0.322])
-        light = ti.Vector([0.2431, 0.4392, 0.5922])
+        # dark  = ti.Vector([0.125,  0.239,  0.322])
+        # light = ti.Vector([0.2431, 0.4392, 0.5922])
 
-        for i in range(grid_n - 1):
-            for j in range(grid_n - 1):
-                cell = i * (grid_n - 1) + j
-                vb   = cell * 4
-                x0 = -grid_half + i * edge;  x1 = x0 + edge
-                z0 = -grid_half + j * edge;  z1 = z0 + edge
+        # for i in range(grid_n - 1):
+        #     for j in range(grid_n - 1):
+        #         cell = i * (grid_n - 1) + j
+        #         vb   = cell * 4
+        #         x0 = -grid_half + i * edge;  x1 = x0 + edge
+        #         z0 = -grid_half + j * edge;  z1 = z0 + edge
 
-                self._ground_v[vb + 0] = ti.Vector([x0, 0.0, z0])
-                self._ground_v[vb + 1] = ti.Vector([x1, 0.0, z0])
-                self._ground_v[vb + 2] = ti.Vector([x0, 0.0, z1])
-                self._ground_v[vb + 3] = ti.Vector([x1, 0.0, z1])
+        #         self._ground_v[vb + 0] = ti.Vector([x0, 0.0, z0])
+        #         self._ground_v[vb + 1] = ti.Vector([x1, 0.0, z0])
+        #         self._ground_v[vb + 2] = ti.Vector([x0, 0.0, z1])
+        #         self._ground_v[vb + 3] = ti.Vector([x1, 0.0, z1])
 
-                col = dark if (i + j) % 2 == 0 else light
-                for k in range(4):
-                    self._ground_c[vb + k] = col
+        #         col = dark if (i + j) % 2 == 0 else light
+        #         for k in range(4):
+        #             self._ground_c[vb + k] = col
 
-                ib = cell * 6
-                self._ground_i[ib + 0] = vb;     self._ground_i[ib + 1] = vb + 1
-                self._ground_i[ib + 2] = vb + 2; self._ground_i[ib + 3] = vb + 1
-                self._ground_i[ib + 4] = vb + 3; self._ground_i[ib + 5] = vb + 2
+        #         ib = cell * 6
+        #         self._ground_i[ib + 0] = vb;     self._ground_i[ib + 1] = vb + 1
+        #         self._ground_i[ib + 2] = vb + 2; self._ground_i[ib + 3] = vb + 1
+        #         self._ground_i[ib + 4] = vb + 3; self._ground_i[ib + 5] = vb + 2
 
     def _build_world_axes(self):
         s = self._axis_scale
@@ -588,7 +596,7 @@ class RacingRenderer(TrajectoryTrackingRenderer):
         gates_rpy:      np.ndarray,
         gate_mesh_path: str,
         gate_scale:     float = 1.0,
-        gate_color:     tuple = (0.1, 0.6, 1.0),
+        gate_color:     tuple = (0.25, 0.0, 0.5),
         ref_trajectory: np.ndarray = None,
         **kwargs,
     ):

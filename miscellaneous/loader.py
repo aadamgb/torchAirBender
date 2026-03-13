@@ -22,7 +22,7 @@ def load_gates_from_yaml(path: str) -> tuple[np.ndarray, np.ndarray]:
 
 
 
-def load_TOGT(path: str, steps: int, device) -> dict:
+def load_TOGT(path: str, steps = None, device=None) -> dict:
     """
     Loads a trajectory CSV and returns tensors ready for use in test().
 
@@ -34,6 +34,9 @@ def load_TOGT(path: str, steps: int, device) -> dict:
     """
     df = pd.read_csv(path)
 
+    if steps is None:
+        steps = len(df)
+        
     assert len(df) >= steps, f"Trajectory too short: {len(df)} rows < {steps} steps"
 
     pos = torch.tensor(df[["p_x", "p_y", "p_z"]].values[:steps],         dtype=torch.float32, device=device)
