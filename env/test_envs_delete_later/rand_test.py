@@ -24,8 +24,7 @@ def train(cfg: DictConfig):
     for i in range(cfg.num_envs):
         print(f"--- Environment {i} ---")
         print(f"Mass:        {params_cpu['mass'][i].item():.6f}")
-        print(f"Inertia J:   {params_cpu['J'][i].tolist()}")
         print(f"Arm length:  {params_cpu['arm_length'][i].item():.6f}")
         print(f"Arm angle:  {params_cpu['arm_angle'][i].item():.6f}")
         print(f"Torque constant km:  {params_cpu['km'][i].item():.6f}")
-        print()
+        print(f"Inertia J:   {params_cpu['J'][i].tolist()}")
