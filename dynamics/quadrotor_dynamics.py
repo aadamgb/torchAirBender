@@ -273,6 +273,9 @@ class QuadrotorDynamics:
 
     def get_srt_hover(self):
         return self.m * self.g / 4.0
+    
+    def get_hover_thrust(self):
+        return self.m * self.g 
 
 
 

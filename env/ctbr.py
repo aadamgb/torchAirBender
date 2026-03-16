@@ -199,7 +199,7 @@ def compute_loss(
 
 def train(cfg: DictConfig):
     start = time.time()
-    output_dir = "/home/adame/torchAirBender/outputs/policies/PP"
+    output_dir = "/home/adame/torchAirBender/outputs/policies/CTBR"
     os.makedirs(output_dir, exist_ok=True)
 
     dt         = cfg.dt
@@ -210,7 +210,7 @@ def train(cfg: DictConfig):
     truncation = cfg.truncation
 
     print(f"\n{'='*75}")
-    print(f"  Path Progress")
+    print(f"  TT with CTBR control mode")
     print(f"  Envs: {num_envs}  |  Episodes: {episodes}  |  Steps: {steps}  |  Horizon: {truncation}")
     print(f"{'='*75}\n")
 

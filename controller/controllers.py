@@ -194,46 +194,38 @@ class CTBRController(BaseController):
         tau   = self._J * (self._kp_rate * (w_des - w) / self._dt)        # (N, 3)
 
         wrench = torch.cat([Fz.unsqueeze(-1), tau], dim=-1)               # (N, 4)
-        return self._wrench_to_motors(wrench), wrench
+        return self._wrench_to_motors(wrench)
 
+class CTBR:
+    def __init__(self, alloc_matrix, J, max_thrust=20.0, max_rate=10.0, kp_rate=1.0, dt=0.01):
+        self.alloc_inv  = torch.linalg.pinv(alloc_matrix)
+        self.J          = J
+        self.max_thrust = max_thrust
+        self.max_rate   = max_rate
+        self.kp_rate    = kp_rate
+        self.dt         = dt
 
+    def __call__(self, state, raw):
+        w = state[:, 10:13]
+
+        Fz    = raw[:, 0:1] * self.max_thrust                        # (N, 1)  [0,1] -> [0, max_thrust]
+        w_des = (raw[:, 1:4] * 2.0 - 1.0) * self.max_rate            # (N, 3)  [0,1] -> [-max_rate, max_rate]
+
+        tau    = self.J * (self.kp_rate * (w_des - w) / self.dt)     # (N, 3)
+        wrench = torch.cat([Fz, tau], dim=-1)                        # (N, 4)
+
+        return torch.bmm(self.alloc_inv, wrench.unsqueeze(-1)).squeeze(-1)  # (N, 4) rotor thrusts
+
+    def update_params(self, alloc_matrix=None, J=None, max_thrust=None):
+        if alloc_matrix is not None:
+            self.alloc_inv = torch.linalg.pinv(alloc_matrix)
+        if J is not None:
+            self.J = J
+        if max_thrust is not None:
+            self.max_thrust = max_thrust.reshape(-1, 1) if torch.is_tensor(max_thrust) else max_thrust
 # ===========================================================
 # Geometric Controllers
 # ===========================================================
-class DFGeometricController:
-    # ⚠️ Neglecting Gyroscopic term  Ω × JΩ and  Feed-forward: -J(Ω̂ R^T R_des Ω_des) ⚠️
-    def __init__(self, alloc_matrix, m, g=9.81, kp=200.0, kv=20.0, kR=120.81, kw=3.5):
-        self.alloc_inv = torch.linalg.pinv(alloc_matrix)
-        self.m  = m
-        self.g  = g
-        self.kp = kp
-        self.kv = kv
-        self.kR = kR
-        self.kw = kw
-
-    def __call__(self, state, p_ref, v_ref, a_ref, b1d):
-        p, v, q, w = state[:, 0:3], state[:, 3:6], state[:, 6:10], state[:, 10:13]
-        R = quat_to_rotmat(q)
-
-        e3      = torch.zeros_like(a_ref); e3[:, 2] = 1.0
-        A       = -self.kp * (p - p_ref) - self.kv * (v - v_ref) + self.m * (self.g * e3 + a_ref)
-
-        b3d     = F.normalize(A, dim=-1)
-        b2d     = F.normalize(torch.linalg.cross(b3d, b1d), dim=-1)
-        R_des   = torch.stack([torch.linalg.cross(b2d, b3d), b2d, b3d], dim=-1)
-
-        RdTR    = torch.bmm(R_des.transpose(-1, -2), R)
-        skew    = RdTR - RdTR.transpose(-1, -2)
-        eR      = 0.5 * torch.stack([skew[:, 2, 1], skew[:, 0, 2], skew[:, 1, 0]], dim=-1)
-        # eW      = w - torch.bmm(R.transpose(-1, -2), R_des).bmm(torch.zeros_like(w).unsqueeze(-1)).squeeze(-1)
-        eW      = w #- torch.bmm(R.transpose(-1, -2), R_des).bmm(torch.zeros_like(w).unsqueeze(-1)).squeeze(-1)
-
-        Fz      = (A * R[:, :, 2]).sum(dim=-1, keepdim=True)
-        tau     = -self.kR * eR - self.kw * eW
-        wrench  = torch.cat([Fz, tau], dim=-1)
-
-        return torch.bmm(self.alloc_inv, wrench.unsqueeze(-1)).squeeze(-1)
-
 class DFGC:
     def __init__(self, alloc_matrix, J, m, g=9.81, kp=200.0, kv=20.0, kR=120.81, kw=3.5):
         self.alloc_inv = torch.linalg.pinv(alloc_matrix)
@@ -282,8 +274,8 @@ class DFGC:
         return torch.bmm(self.alloc_inv, wrench.unsqueeze(-1)).squeeze(-1)
     
 class AttitudeGeometricController:
-    def __init__(self, allocation_matrix, J, kR=120.81, kw=3.5):
-        self.alloc_inv = torch.linalg.pinv(allocation_matrix)
+    def __init__(self, alloc_matrix, J, kR=120.81, kw=3.5):
+        self.alloc_inv = torch.linalg.pinv(alloc_matrix)
         self.J  = J                  # (N, 3)
         self.kR = kR
         self.kw = kw

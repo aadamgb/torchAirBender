@@ -2,6 +2,36 @@ import torch
 import torch.nn.functional as F
 from torch import Tensor
 
+
+def acc_to_quat(acc_ref: Tensor, v_ref: Tensor, g: float = 9.81) -> Tensor:
+    """
+    Computes desired quaternion from reference acceleration and velocity.
+    Heading is derived from v_ref (projected onto XY plane).
+    Builds R_des the same way as the geometric controller.
+
+    Args:
+        acc_ref : (N, 3)  reference acceleration
+        v_ref   : (N, 3)  reference velocity (used for heading)
+    Returns:
+        q_des   : (N, 4)  [w, x, y, z]
+    """
+    # heading from velocity reference, projected onto XY plane
+    v_heading       = v_ref.clone()
+    v_heading[:, 2] = 0.0
+    b1d             = F.normalize(v_heading, dim=-1)                    # (N, 3)
+
+    # thrust direction from acceleration + gravity
+    gravity    = torch.tensor([0.0, 0.0, g], device=acc_ref.device)
+    A          = acc_ref + gravity                                      # (N, 3)
+
+    b3d        = F.normalize(A, dim=-1)                                 # (N, 3)
+    b2d        = F.normalize(torch.linalg.cross(b3d, b1d), dim=-1)     # (N, 3)
+    b1d_ort    = torch.linalg.cross(b2d, b3d)                          # (N, 3)
+
+    R_des      = torch.stack([b1d_ort, b2d, b3d], dim=-1)              # (N, 3, 3)
+
+    return rotmat_to_quat(R_des)                                        # (N, 4) 
+
 @torch.jit.script
 def quat_to_rotmat(q: Tensor) -> Tensor:
     """
@@ -22,6 +52,27 @@ def quat_to_rotmat(q: Tensor) -> Tensor:
     ], dim=-2)  # (B, 3, 3)
 
     return R
+
+@torch.jit.script
+def rotmat_to_quat(R: Tensor) -> Tensor:
+    """
+    Rotation matrix to quaternion [w, x, y, z] — Shepperd method.
+    Args:
+        R : (N, 3, 3)
+    Returns:
+        q : (N, 4)
+    """
+    trace = R[:, 0, 0] + R[:, 1, 1] + R[:, 2, 2]                  # (N,)
+
+    q = torch.zeros(R.shape[0], 4, device=R.device, dtype=R.dtype)
+
+    s = torch.sqrt(torch.clamp(trace + 1.0, min=1e-10)) * 2        # 4w
+    q[:, 0] = 0.25 * s
+    q[:, 1] = (R[:, 2, 1] - R[:, 1, 2]) / s
+    q[:, 2] = (R[:, 0, 2] - R[:, 2, 0]) / s
+    q[:, 3] = (R[:, 1, 0] - R[:, 0, 1]) / s
+
+    return F.normalize(q, dim=-1)
 
 @torch.jit.script
 def quat_derivative(q: Tensor, w: Tensor) -> Tensor:

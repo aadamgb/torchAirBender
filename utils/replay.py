@@ -122,8 +122,8 @@ class BaseRenderer:
 
         # Precompute arm tip positions in Taichi coords
         # 4 arms radiating from centre using arm_angle offset
-        # s, c = math.sin(math.radians(arm_angle)), math.cos(math.radians(arm_angle))
-        s, c = math.sin(arm_angle), math.cos(arm_angle)
+        s, c = math.sin(math.radians(arm_angle)), math.cos(math.radians(arm_angle))
+        # s, c = math.sin(arm_angle), math.cos(arm_angle)
         # arm_dirs_body = arm_length * np.array([
         #     [ s, -c, 0],   # motor 1
         #     [ s,  c, 0],   # motor 2

@@ -243,7 +243,9 @@ def train(cfg: DictConfig):
         quadrotor.set_parameters(randomized_params)
 
         hover_thrust = quadrotor.get_srt_hover()   # per rotor
-        controller   = SRTController(hover_thrust, hover_ratio=cfg.env.max_mass_norm_thrust)
+        controller   = SRTController(hover_thrust,
+                                      hover_ratio=cfg.env.max_mass_norm_thrust,
+                                      alloc_matrix=quadrotor._alloc_matrix)
 
         ep_loss    = 0.0
         num_updates = 0
@@ -260,7 +262,7 @@ def train(cfg: DictConfig):
 
             obs     = get_observation(states, pos_ref, vel_ref, acc_ref)
             raw     = policy(obs)
-            actions = controller(raw)
+            actions, _ = controller(raw)
             states  = quadrotor.step(state=states, action=actions)
 
             # --- termination ---
@@ -402,7 +404,7 @@ def test(cfg: DictConfig):
     print(randomized_params)
 
     hover_thrust = quadrotor.get_srt_hover()   # per rotor
-    controller   = SRTController(hover_thrust, hover_ratio=cfg.env.max_mass_norm_thrust)
+    controller   = SRTController(hover_thrust, hover_ratio=cfg.env.max_mass_norm_thrust, alloc_matrix=quadrotor._alloc_matrix)
 
     traj = torch.empty((steps, 20), device=device)  # 13 state + 4 actions + 3 ref pos
 
@@ -422,7 +424,7 @@ def test(cfg: DictConfig):
 
             obs     = get_observation(states, pos_ref, vel_ref, acc_ref)
             raw     = policy(obs)
-            actions = controller(raw)   # mapping the policy outputs \in [0,1] to motor thrust
+            actions, _ = controller(raw)   # mapping the policy outputs \in [0,1] to motor thrust
             states  = quadrotor.step(state=states, action=actions)
 
             dist    = torch.linalg.norm(pos_ref - states[:, 0:3], dim=-1)

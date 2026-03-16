@@ -1,5 +1,5 @@
-name: path_progress
-abbr: pp
+name: ctbr
+abbr: ctbr
 
 encoder: [7, 16, 16, 3]
 policy: [19, 128, 128, 4]
@@ -20,7 +20,7 @@ traj:
   num_harmonics: 3  # must be integer
   z_offset: 2.0
   A: 1.0
-  w: 1.5
+  w: 1.0
   phi: 2.0
 
 max_dist_to_target: 5.0
