@@ -3,7 +3,7 @@ import torch.nn.functional as F
 from torch import Tensor
 
 
-def acc_to_quat(acc_ref: Tensor, v_ref: Tensor, g: float = 9.81) -> Tensor:
+def acc_to_quat2(acc_ref: Tensor, v_ref: Tensor, g: float = 9.81) -> Tensor:
     """
     Computes desired quaternion from reference acceleration and velocity.
     Heading is derived from v_ref (projected onto XY plane).
@@ -31,6 +31,39 @@ def acc_to_quat(acc_ref: Tensor, v_ref: Tensor, g: float = 9.81) -> Tensor:
     R_des      = torch.stack([b1d_ort, b2d, b3d], dim=-1)              # (N, 3, 3)
 
     return rotmat_to_quat(R_des)                                        # (N, 4) 
+
+def acc_to_quat(acc_ref: Tensor, g: float = 9.81) -> Tensor:
+    """
+    Computes desired quaternion from reference acceleration.
+    Desired thrust direction = acc_ref + gravity_vector.
+
+    Args:
+        acc_ref : (N, 3)
+    Returns:
+        q_des   : (N, 4)  [w, x, y, z]
+    """
+    gravity = torch.tensor([0.0, 0.0, g], device=acc_ref.device)   # acceleration compensation
+    thrust_dir = acc_ref + gravity                                     # (N, 3)
+    thrust_dir = torch.nn.functional.normalize(thrust_dir, dim=-1)    # (N, 3)
+
+    # Body z-axis in world frame should align with thrust_dir
+    # Rotation from world z [0,0,1] to thrust_dir
+    world_z = torch.zeros_like(thrust_dir)
+    world_z[:, 2] = 1.0
+
+    # Axis of rotation = cross(world_z, thrust_dir)
+    axis = torch.linalg.cross(world_z, thrust_dir)                    # (N, 3)
+    # Angle: cos(theta) = dot(world_z, thrust_dir)
+    dot  = (world_z * thrust_dir).sum(dim=-1, keepdim=True)           # (N, 1)
+
+    # Quaternion: w = cos(theta/2), xyz = sin(theta/2) * axis_normalized
+    # Using half-angle: w = sqrt((1 + cos)/2), |xyz| = sqrt((1 - cos)/2)
+    w   = torch.sqrt(torch.clamp((1.0 + dot) / 2.0, min=1e-6))       # (N, 1)
+    xyz = torch.nn.functional.normalize(axis, dim=-1) * torch.sqrt(
+        torch.clamp((1.0 - dot) / 2.0, min=0.0)
+    )                                                                  # (N, 3)
+
+    return torch.cat([w, xyz], dim=-1)                                 # (N, 4)
 
 @torch.jit.script
 def quat_to_rotmat(q: Tensor) -> Tensor:

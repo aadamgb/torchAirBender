@@ -205,18 +205,18 @@ class BaseRenderer:
     # ------------------------------------------------------------------
 
     def _build_ground(self):
-        grid_n    = 20
-        grid_half = 40
-        # edge      = 2.0 * grid_half / (grid_n - 1)
+        grid_n    = 10
+        grid_half = 10
+        edge      = 2.0 * grid_half / (grid_n - 1)
 
         self._grid_verts = ti.Vector.field(3, dtype=ti.f32, shape=4 * grid_n)
         gi = 0
         for k in range(grid_n):
             v = -grid_half + 2 * grid_half * k / (grid_n - 1)
-            self._grid_verts[gi + 0] = ti.Vector([v,          0.0, -grid_half])
-            self._grid_verts[gi + 1] = ti.Vector([v,          0.0,  grid_half])
-            self._grid_verts[gi + 2] = ti.Vector([-grid_half, 0.0,  v])
-            self._grid_verts[gi + 3] = ti.Vector([ grid_half, 0.0,  v])
+            self._grid_verts[gi + 0] = ti.Vector([v,          0.002, -grid_half])
+            self._grid_verts[gi + 1] = ti.Vector([v,          0.002,  grid_half])
+            self._grid_verts[gi + 2] = ti.Vector([-grid_half, 0.002,  v])
+            self._grid_verts[gi + 3] = ti.Vector([ grid_half, 0.002,  v])
             gi += 4
 
         num_cells      = (grid_n - 1) ** 2
@@ -224,29 +224,29 @@ class BaseRenderer:
         self._ground_c = ti.Vector.field(3, dtype=ti.f32, shape=num_cells * 4)
         self._ground_i = ti.field(dtype=ti.i32,           shape=num_cells * 6)
 
-        # dark  = ti.Vector([0.125,  0.239,  0.322])
-        # light = ti.Vector([0.2431, 0.4392, 0.5922])
+        dark  = ti.Vector([0.125,  0.239,  0.322])
+        light = ti.Vector([0.2431, 0.4392, 0.5922])
 
-        # for i in range(grid_n - 1):
-        #     for j in range(grid_n - 1):
-        #         cell = i * (grid_n - 1) + j
-        #         vb   = cell * 4
-        #         x0 = -grid_half + i * edge;  x1 = x0 + edge
-        #         z0 = -grid_half + j * edge;  z1 = z0 + edge
+        for i in range(grid_n - 1):
+            for j in range(grid_n - 1):
+                cell = i * (grid_n - 1) + j
+                vb   = cell * 4
+                x0 = -grid_half + i * edge;  x1 = x0 + edge
+                z0 = -grid_half + j * edge;  z1 = z0 + edge
 
-        #         self._ground_v[vb + 0] = ti.Vector([x0, 0.0, z0])
-        #         self._ground_v[vb + 1] = ti.Vector([x1, 0.0, z0])
-        #         self._ground_v[vb + 2] = ti.Vector([x0, 0.0, z1])
-        #         self._ground_v[vb + 3] = ti.Vector([x1, 0.0, z1])
+                self._ground_v[vb + 0] = ti.Vector([x0, 0.0, z0])
+                self._ground_v[vb + 1] = ti.Vector([x1, 0.0, z0])
+                self._ground_v[vb + 2] = ti.Vector([x0, 0.0, z1])
+                self._ground_v[vb + 3] = ti.Vector([x1, 0.0, z1])
 
-        #         col = dark if (i + j) % 2 == 0 else light
-        #         for k in range(4):
-        #             self._ground_c[vb + k] = col
+                col = dark if (i + j) % 2 == 0 else light
+                for k in range(4):
+                    self._ground_c[vb + k] = col
 
-        #         ib = cell * 6
-        #         self._ground_i[ib + 0] = vb;     self._ground_i[ib + 1] = vb + 1
-        #         self._ground_i[ib + 2] = vb + 2; self._ground_i[ib + 3] = vb + 1
-        #         self._ground_i[ib + 4] = vb + 3; self._ground_i[ib + 5] = vb + 2
+                ib = cell * 6
+                self._ground_i[ib + 0] = vb;     self._ground_i[ib + 1] = vb + 1
+                self._ground_i[ib + 2] = vb + 2; self._ground_i[ib + 3] = vb + 1
+                self._ground_i[ib + 4] = vb + 3; self._ground_i[ib + 5] = vb + 2
 
     def _build_world_axes(self):
         s = self._axis_scale
@@ -421,7 +421,7 @@ class BaseRenderer:
             # --- ground ---
             if show_ground:
                 scene.mesh(self._ground_v, indices=self._ground_i, per_vertex_color=self._ground_c)
-                scene.lines(self._grid_verts, width=1.0, color=(0.2, 0.2, 0.3))
+            scene.lines(self._grid_verts, width=1.0, color=(0.2, 0.2, 0.3), )
 
             # --- world / body axes ---
             if show_axes:

@@ -226,6 +226,61 @@ class CTBR:
 # ===========================================================
 # Geometric Controllers
 # ===========================================================
+class DFGC_PolicyDriven:
+    """
+    Inner loop: full geometric attitude controller (unchanged).
+    Outer loop: replaced by policy output (F_des, b3d_des).
+    """
+    def __init__(self, alloc_matrix, J, m, g=9.81, kR=120.81, kw=3.5):
+        self.alloc_inv = torch.linalg.pinv(alloc_matrix)
+        self.J  = J
+        self.m  = m
+        self.g  = g
+        self.kR = kR
+        self.kw = kw
+
+    def __call__(self, state, policy_out, b1d, w_des=None):
+        """
+        policy_out: (N, 4)
+          - policy_out[:, 0]   → collective thrust F  (Sigmoid → scale to [0, 2*hover])
+          - policy_out[:, 1:4] → desired b3d direction (unnormalized, we normalize here)
+        """
+        p, v, q, w = state[:, 0:3], state[:, 3:6], state[:, 6:10], state[:, 10:13]
+        R = quat_to_rotmat(q)
+
+        # --- Unpack policy output ---
+        F_raw  = policy_out[:, 0:1]                        # (N, 1) ∈ (0, 1)
+        b3d    = F.normalize(policy_out[:, 1:4] - 0.5, dim=-1)  # (N, 3) centered then normalized
+
+        # Scale thrust: Sigmoid output → physical range
+        # Hover thrust ≈ m*g; allow [0, 2*m*g]
+        F_max  = 2.0 * self.m * self.g                     # (N,)
+        Fz     = F_raw * F_max.unsqueeze(-1)               # (N, 1)
+
+        # --- Desired rotation matrix from b3d and b1d ---
+        b2d    = F.normalize(torch.linalg.cross(b3d, b1d), dim=-1)
+        R_des  = torch.stack([torch.linalg.cross(b2d, b3d), b2d, b3d], dim=-1)
+
+        # --- Attitude error (same as original DFGC) ---
+        RdTR   = torch.bmm(R_des.transpose(-1, -2), R)
+        skew   = RdTR - RdTR.transpose(-1, -2)
+        eR     = 0.5 * torch.stack([skew[:, 2, 1], skew[:, 0, 2], skew[:, 1, 0]], dim=-1)
+
+        RTRd   = torch.bmm(R.transpose(-1, -2), R_des)
+        w_des_ = torch.zeros_like(w) if w_des is None else w_des
+        eW     = w - torch.bmm(RTRd, w_des_.unsqueeze(-1)).squeeze(-1)
+
+        # --- Gyroscopic + FF term ---
+        Jw   = self.J * w
+        gyro = torch.linalg.cross(w, Jw)
+
+        # --- Torque ---
+        tau    = -self.kR * eR - self.kw * eW + gyro
+        wrench = torch.cat([Fz, tau], dim=-1)              # (N, 4)
+
+        T = torch.bmm(self.alloc_inv, wrench.unsqueeze(-1)).squeeze(-1)
+        return T
+
 class DFGC:
     def __init__(self, alloc_matrix, J, m, g=9.81, kp=200.0, kv=20.0, kR=120.81, kw=3.5):
         self.alloc_inv = torch.linalg.pinv(alloc_matrix)
@@ -237,12 +292,26 @@ class DFGC:
         self.kR = kR
         self.kw = kw
 
+    def _apply_airmode(self, u):
+        """
+        Airmode: if any motor is negative, boost collective thrust
+        to bring the minimum motor command up to u_min.
+        Preserves torque commands (attitude tracking) at the cost
+        of a small thrust increase.
+        """
+        min_u = u.min(dim=-1, keepdim=True).values          # (N, 1)
+        deficit = torch.clamp(-min_u, min=0.0)               # how much to boost
+        u = u + deficit                                       # lift floor to 0
+        # Still clip the ceiling
+        u = torch.clamp(u, 0.0, 100.0)
+        return u
+
     def __call__(self, state, p_ref, v_ref, a_ref, b1d, w_des=None):
         p, v, q, w = state[:, 0:3], state[:, 3:6], state[:, 6:10], state[:, 10:13]
         R = quat_to_rotmat(q)
 
         e3      = torch.zeros_like(a_ref); e3[:, 2] = 1.0
-        A       = -self.kp * (p - p_ref) - self.kv * (v - v_ref) + self.m * (self.g * e3 + a_ref)
+        A       = -self.kp * (p - p_ref) - self.kv * (v - v_ref) + self.m.unsqueeze(1) * (self.g * e3 + a_ref)
 
         b3d     = F.normalize(A, dim=-1)
         b2d     = F.normalize(torch.linalg.cross(b3d, b1d), dim=-1)
@@ -271,8 +340,10 @@ class DFGC:
         tau     = -self.kR * eR - self.kw * eW + gyro - ff
         wrench  = torch.cat([Fz, tau], dim=-1)
 
-        return torch.bmm(self.alloc_inv, wrench.unsqueeze(-1)).squeeze(-1)
-    
+        T = torch.bmm(self.alloc_inv, wrench.unsqueeze(-1)).squeeze(-1)
+        # T = self._apply_airmode(T)
+        return T
+
 class AttitudeGeometricController:
     def __init__(self, alloc_matrix, J, kR=120.81, kw=3.5):
         self.alloc_inv = torch.linalg.pinv(alloc_matrix)

@@ -75,13 +75,13 @@ def compute_loss(states, pos_ref, vel_ref, acc_ref, weights, mask=None):
 
 def train(cfg: DictConfig):
     start    = time.time()
-    out_dir  = "/home/adame/torchAirBender/outputs/policies/CTBR"
+    out_dir  = "/home/adame/torchAirBender/outputs/policies/GEO"
     os.makedirs(out_dir, exist_ok=True)
 
     dt, device, num_envs = cfg.dt, cfg.device, cfg.num_envs
 
     print(f"\n{'='*75}")
-    print(f"  CTBR  |  Envs: {num_envs}  |  Episodes: {cfg.episodes}  |  Steps: {cfg.steps}  |  Horizon: {cfg.truncation}")
+    print(f"  GEO  |  Envs: {num_envs}  |  Episodes: {cfg.episodes}  |  Steps: {cfg.steps}  |  Horizon: {cfg.truncation}")
     print(f"{'='*75}\n")
 
     quadrotor  = QuadrotorDynamics(cfg)
@@ -94,6 +94,7 @@ def train(cfg: DictConfig):
         w_max        = cfg.env.w_max,
         kp_rate      = cfg.env.kp_rate,
     )
+
     policy    = MLP(cfg.env.policy, nn.ReLU, nn.Sigmoid(), output_bias_init=0.0).to(device)
     optimizer = torch.optim.Adam(policy.parameters(), lr=cfg.env.lr)
     traj      = TrajectoryManager.from_harmonics(cfg.env.traj, num_envs, device)

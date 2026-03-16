@@ -1,0 +1,40 @@
+name: geo
+abbr: geo
+
+encoder: [7, 16, 16, 3]
+policy: [16, 128, 128, 4]
+
+
+lr: 1e-3
+
+
+loss_weights:
+  pos: 2.0
+  vel: 1.0
+  att: 0.5
+  body_rates: 0.2
+  # jerk_Fz: 0.0
+  # jerk_att: 0.5
+
+
+
+traj:
+  num_harmonics: 3  # must be integer
+  z_offset: 2.0
+  A: 1.0
+  w: 1.0
+  phi: 2.0
+  dt: 0.01
+
+
+max_dist_to_target: 5.0
+rmse_threshold: 0.15
+
+max_mass_norm_thrust: 3.0
+kp_rate: 1.0
+w_max: 5.0
+max_TTWR: 2.0
+
+track_path: "/home/adame/torchAirBender/miscellaneous/race_tracks/a2rl-s2.yaml"
+trajectory_path: "/home/adame/torchAirBender/miscellaneous/trajectories/TOGT/togt_a2rl-s2.csv"
+

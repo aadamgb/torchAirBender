@@ -11,7 +11,7 @@ from utils.trajectory import TrajectoryManager
 from utils.math import acc_to_quat
 
 from dynamics.quadrotor_dynamics import QuadrotorDynamics
-from controller.controllers import CTBRController
+from controller.controllers import CTBRController, DFGC
 
 
 def reset(cfg, traj, quadrotor, controller):
@@ -19,15 +19,15 @@ def reset(cfg, traj, quadrotor, controller):
     states = torch.zeros((cfg.num_envs, 13), device=cfg.device)
     states[:, 0:3]  = pos0.detach()
     states[:, 3:6]  = vel0.detach()
-    states[:, 6:10] = acc_to_quat(acc0.detach(), vel0.detach())
+    states[:, 6:10] = acc_to_quat(acc0.detach())
 
     params = randomize_parameters(cfg.dynamics, cfg.num_envs, cfg.device)
     quadrotor.set_parameters(params)
-    controller.update_parameters(
-        hover_thrust = quadrotor.get_hover_thrust(),
-        alloc_matrix = quadrotor._alloc_matrix,
-        J            = quadrotor.J,
-    )
+    # controller.update_parameters(
+    #     hover_thrust = quadrotor.get_hover_thrust(),
+    #     alloc_matrix = quadrotor._alloc_matrix,
+    #     J            = quadrotor.J,
+    # )
     return states, params
 
 
@@ -37,7 +37,7 @@ def reset_terminated(states, terminated, pos_ref, vel_ref, acc_ref):
     idx = terminated.nonzero(as_tuple=True)[0]
     states[idx, 0:3]   = pos_ref[idx].detach()
     states[idx, 3:6]   = vel_ref[idx].detach()
-    states[idx, 6:10]  = acc_to_quat(acc_ref[idx].detach(), vel_ref[idx].detach())
+    states[idx, 6:10]  = acc_to_quat(acc_ref[idx].detach())
     states[idx, 10:13] = 0.0
     return states
 
@@ -75,25 +75,34 @@ def compute_loss(states, pos_ref, vel_ref, acc_ref, weights, mask=None):
 
 def train(cfg: DictConfig):
     start    = time.time()
-    out_dir  = "/home/adame/torchAirBender/outputs/policies/CTBR"
+    out_dir  = "/home/adame/torchAirBender/outputs/policies/GEO"
     os.makedirs(out_dir, exist_ok=True)
 
     dt, device, num_envs = cfg.dt, cfg.device, cfg.num_envs
 
     print(f"\n{'='*75}")
-    print(f"  CTBR  |  Envs: {num_envs}  |  Episodes: {cfg.episodes}  |  Steps: {cfg.steps}  |  Horizon: {cfg.truncation}")
+    print(f"  GEO  |  Envs: {num_envs}  |  Episodes: {cfg.episodes}  |  Steps: {cfg.steps}  |  Horizon: {cfg.truncation}")
     print(f"{'='*75}\n")
 
     quadrotor  = QuadrotorDynamics(cfg)
-    controller = CTBRController(
-        hover_thrust = quadrotor.get_hover_thrust(),
-        alloc_matrix = quadrotor._alloc_matrix,
-        J            = quadrotor.J,
-        dt           = dt,
-        hover_ratio  = cfg.env.max_mass_norm_thrust,
-        w_max        = cfg.env.w_max,
-        kp_rate      = cfg.env.kp_rate,
+    quadrotor.set_parameters(randomize_parameters(cfg.dynamics, num_envs, device))
+    # controller = CTBRController(
+    #     hover_thrust = quadrotor.get_hover_thrust(),
+    #     alloc_matrix = quadrotor._alloc_matrix,
+    #     J            = quadrotor.J,
+    #     dt           = dt,
+    #     hover_ratio  = cfg.env.max_mass_norm_thrust,
+    #     w_max        = cfg.env.w_max,
+    #     kp_rate      = cfg.env.kp_rate,
+    # )
+
+    controller = DFGC(
+        alloc_matrix    = quadrotor._alloc_matrix,
+        J               = quadrotor.J,
+        m               = quadrotor.m,      
+        g               = quadrotor.g   
     )
+
     policy    = MLP(cfg.env.policy, nn.ReLU, nn.Sigmoid(), output_bias_init=0.0).to(device)
     optimizer = torch.optim.Adam(policy.parameters(), lr=cfg.env.lr)
     traj      = TrajectoryManager.from_harmonics(cfg.env.traj, num_envs, device)
@@ -117,10 +126,11 @@ def train(cfg: DictConfig):
                 window_start = t
                 window_loss  = torch.zeros(1, device=device)
 
-            pos_ref, vel_ref, acc_ref, _ = traj.get_reference(t)
+            pos_ref, vel_ref, acc_ref, b1d_ref = traj.get_reference(t)
 
             obs     = get_observation(states, pos_ref, vel_ref, acc_ref)
-            actions = controller(policy(obs), states[:, 10:13])
+            # actions = controller(policy(obs), states[:, 10:13])
+            actions = controller(states, pos_ref, vel_ref, acc_ref, b1d_ref)
             states  = quadrotor.step(states, actions)
 
             dist    = torch.linalg.norm(pos_ref - states[:, 0:3], dim=-1)
@@ -139,13 +149,13 @@ def train(cfg: DictConfig):
                     [states[0].detach(), actions[0].detach(), pos_ref[0].detach()], dim=0
                 )
 
-            if (t + 1) % cfg.truncation == 0 or (t + 1) == cfg.steps:
-                loss = window_loss / ((t + 1) - window_start)
-                optimizer.zero_grad()
-                loss.backward()
-                optimizer.step()
-                ep_loss     += loss.item()
-                num_updates += 1
+            # if (t + 1) % cfg.truncation == 0 or (t + 1) == cfg.steps:
+            #     loss = window_loss / ((t + 1) - window_start)
+            #     optimizer.zero_grad()
+            #     loss.backward()
+            #     optimizer.step()
+            #     ep_loss     += loss.item()
+            #     num_updates += 1
 
             states = reset_terminated(states, too_far, pos_ref, vel_ref, acc_ref)
 

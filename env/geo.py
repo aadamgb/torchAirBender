@@ -11,7 +11,7 @@ from utils.trajectory import TrajectoryManager
 from utils.math import acc_to_quat
 
 from dynamics.quadrotor_dynamics import QuadrotorDynamics
-from controller.controllers import CTBRController
+from controller.controllers import CTBRController, DFGC_PolicyDriven
 
 
 def reset(cfg, traj, quadrotor, controller):
@@ -23,11 +23,11 @@ def reset(cfg, traj, quadrotor, controller):
 
     params = randomize_parameters(cfg.dynamics, cfg.num_envs, cfg.device)
     quadrotor.set_parameters(params)
-    controller.update_parameters(
-        hover_thrust = quadrotor.get_hover_thrust(),
-        alloc_matrix = quadrotor._alloc_matrix,
-        J            = quadrotor.J,
-    )
+    # controller.update_parameters(
+    #     hover_thrust = quadrotor.get_hover_thrust(),
+    #     alloc_matrix = quadrotor._alloc_matrix,
+    #     J            = quadrotor.J,
+    # )
     return states, params
 
 
@@ -75,33 +75,44 @@ def compute_loss(states, pos_ref, vel_ref, acc_ref, weights, mask=None):
 
 def train(cfg: DictConfig):
     start    = time.time()
-    out_dir  = "/home/adame/torchAirBender/outputs/policies/CTBR"
+    out_dir  = "/home/adame/torchAirBender/outputs/policies/GEO"
     os.makedirs(out_dir, exist_ok=True)
 
-    dt, device, num_envs = cfg.dt, cfg.device, cfg.num_envs
+    dt, device, num_envs, episodes, steps = cfg.dt, cfg.device, cfg.num_envs, cfg.episodes, cfg.steps
 
     print(f"\n{'='*75}")
-    print(f"  CTBR  |  Envs: {num_envs}  |  Episodes: {cfg.episodes}  |  Steps: {cfg.steps}  |  Horizon: {cfg.truncation}")
+    print(f"  GEO  |  Envs: {num_envs}  |  Episodes: {cfg.episodes}  |  Steps: {cfg.steps}  |  Horizon: {cfg.truncation}")
     print(f"{'='*75}\n")
 
     quadrotor  = QuadrotorDynamics(cfg)
-    controller = CTBRController(
-        hover_thrust = quadrotor.get_hover_thrust(),
-        alloc_matrix = quadrotor._alloc_matrix,
-        J            = quadrotor.J,
-        dt           = dt,
-        hover_ratio  = cfg.env.max_mass_norm_thrust,
-        w_max        = cfg.env.w_max,
-        kp_rate      = cfg.env.kp_rate,
+    quadrotor.set_parameters(randomize_parameters(cfg.dynamics, num_envs, device))
+    # controller = CTBRController(
+    #     hover_thrust = quadrotor.get_hover_thrust(),
+    #     alloc_matrix = quadrotor._alloc_matrix,
+    #     J            = quadrotor.J,
+    #     dt           = dt,
+    #     hover_ratio  = cfg.env.max_mass_norm_thrust,
+    #     w_max        = cfg.env.w_max,
+    #     kp_rate      = cfg.env.kp_rate,
+    # )
+
+    controller = DFGC_PolicyDriven(
+        alloc_matrix    = quadrotor._alloc_matrix,
+        J               = quadrotor.J,
+        m               = quadrotor.m,      
+        g               = quadrotor.g,
+        kR              = 10.0,
+        kw              = 1.0
     )
+
     policy    = MLP(cfg.env.policy, nn.ReLU, nn.Sigmoid(), output_bias_init=0.0).to(device)
     optimizer = torch.optim.Adam(policy.parameters(), lr=cfg.env.lr)
     traj      = TrajectoryManager.from_harmonics(cfg.env.traj, num_envs, device)
 
     best_loss    = float("inf")
-    traj_env0    = torch.empty((cfg.steps, 20), device=device)
+    traj_env0    = torch.empty((steps, 20), device=device)
 
-    for ep in range(cfg.episodes):
+    for ep in range(episodes):
         traj.randomize()
         states, last_params = reset(cfg, traj, quadrotor, controller)
 
@@ -111,16 +122,18 @@ def train(cfg: DictConfig):
         window_loss           = torch.zeros(1, device=device)
         window_start          = 0
 
-        for t in range(cfg.steps):
+        for t in range(steps):
             if t % cfg.truncation == 0:
                 states       = states.detach()
                 window_start = t
                 window_loss  = torch.zeros(1, device=device)
 
-            pos_ref, vel_ref, acc_ref, _ = traj.get_reference(t)
+            pos_ref, vel_ref, acc_ref, b1d_ref = traj.get_reference(t)
 
             obs     = get_observation(states, pos_ref, vel_ref, acc_ref)
-            actions = controller(policy(obs), states[:, 10:13])
+            raw = policy(obs)
+
+            actions = controller(states, raw, b1d_ref)
             states  = quadrotor.step(states, actions)
 
             dist    = torch.linalg.norm(pos_ref - states[:, 0:3], dim=-1)
@@ -173,3 +186,28 @@ def train(cfg: DictConfig):
         mass           = float(last_params.mass[0].cpu()),
         dt             = dt,
     ).run()
+
+
+    import matplotlib.pyplot as plt
+    import numpy as np
+
+    # convert to cpu numpy
+    traj_np = traj_env0.cpu().numpy()
+
+    actions = traj_np[:, 13:17]  # 4 motors
+    timee = np.arange(steps) * dt
+
+    plt.figure(figsize=(10,5))
+
+    plt.plot(timee, actions[:,0], label="motor 1")
+    plt.plot(timee, actions[:,1], label="motor 2")
+    plt.plot(timee, actions[:,2], label="motor 3")
+    plt.plot(timee, actions[:,3], label="motor 4")
+
+    plt.xlabel("Time [s]")
+    plt.ylabel("Motor command")
+    plt.title("Quadrotor Actions Over Rollout")
+    plt.legend()
+    plt.grid(True)
+
+    plt.show()
