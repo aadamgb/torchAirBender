@@ -173,3 +173,28 @@ def train(cfg: DictConfig):
         mass           = float(last_params.mass[0].cpu()),
         dt             = dt,
     ).run()
+
+
+    import matplotlib.pyplot as plt
+    import numpy as np
+
+    # convert to cpu numpy
+    traj_np = traj_env0.cpu().numpy()
+
+    actions = traj_np[:, 13:17]  # 4 motors
+    timee = np.arange(cfg.steps) * dt
+
+    plt.figure(figsize=(10,5))
+
+    plt.plot(timee, actions[:,0], label="motor 1")
+    plt.plot(timee, actions[:,1], label="motor 2")
+    plt.plot(timee, actions[:,2], label="motor 3")
+    plt.plot(timee, actions[:,3], label="motor 4")
+
+    plt.xlabel("Time [s]")
+    plt.ylabel("Motor command")
+    plt.title("Quadrotor Actions Over Rollout")
+    plt.legend()
+    plt.grid(True)
+
+    plt.show()
