@@ -104,7 +104,7 @@ class BaseRenderer:
 
         # Sphere radius scales with mass: normalised so ~0.5 kg -> ~arm*0.10
         # self._sphere_r = arm_length * 0.08 * (mass / 0.5) ** (1/3) 
-        self._sphere_r = arm_length * 0.04 * (mass / 0.5) ** (1/3) 
+        self._sphere_r = arm_length * 0.08 * (mass / 0.5) ** (1/3) 
         self._motor_r  = self._sphere_r * 0.75
 
         # Precompute all positions in Taichi coords

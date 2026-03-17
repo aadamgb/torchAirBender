@@ -3,7 +3,7 @@
 import torch
 import torch.nn.functional as F
 from torch import Tensor
-from omegaconf import DictConfig
+# from omegaconf import DictConfig
 from abc import ABC, abstractmethod
 from utils.math import quat_to_rotmat
 

@@ -1,6 +1,6 @@
 defaults:
-  - env: hover
-  - dynamics: quadrotor
+  - env: hover        # Task
+  - dynamics: a300    # Quadrotor Model
   - renderer: replay
   - _self_
 
@@ -9,6 +9,7 @@ defaults:
 device: "cuda"
 dt: 0.01
 
+cm: ctbr          # Control Mode
 
 num_envs: 1
 episodes: 20

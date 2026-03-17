@@ -11,7 +11,7 @@ from utils.trajectory import TrajectoryManager
 from utils.math import acc_to_quat
 
 from dynamics.quadrotor_dynamics import QuadrotorDynamics
-from controller.controllers import CTBRController
+from controller.ctbr import SRT, CTBR
 
 
 def reset(cfg, traj, quadrotor, controller):
@@ -23,8 +23,7 @@ def reset(cfg, traj, quadrotor, controller):
 
     params = randomize_parameters(cfg.dynamics, cfg.num_envs, cfg.device)
     quadrotor.set_parameters(params)
-    controller.update_parameters(
-        hover_thrust = quadrotor.get_hover_thrust(),
+    controller.update_params(
         alloc_matrix = quadrotor._alloc_matrix,
         J            = quadrotor.J,
     )
@@ -72,28 +71,40 @@ def compute_loss(states, pos_ref, vel_ref, acc_ref, weights, mask=None):
     return (weights.pos * pos_loss + weights.vel * vel_loss +
             weights.att * att_loss + weights.body_rates * rate_loss)
 
-
+def build_controller(cm_type, quadrotor, cfg):
+    # TODO: ideally most of the params should be gotten from quadrotor object
+    if cm_type == "srt":
+        return SRT(
+            # max_thrust=cfg.dynamics.max_thrust, 
+            # min_thrust=cfg.dynamics.min_thrust
+        )
+    elif cm_type == "ctbr":
+        return CTBR(
+            alloc_matrix=quadrotor._alloc_matrix,
+            J=quadrotor.J,
+            # max_thrust=cfg.dynamics.max_thrust, # TODO
+            # min_thrust=cfg.dynamics.min_thrust,
+            max_rate=cfg.env.w_max,
+            kp_rate=cfg.env.kp_rate,
+            dt=cfg.dt
+        )
+    else:
+        raise ValueError(f"Unknown control mode: {cm_type}")
+    
 def train(cfg: DictConfig):
     start    = time.time()
-    out_dir  = "/home/adame/torchAirBender/outputs/policies/CTBR"
+    dt, device, num_envs, cm = cfg.dt, cfg.device, cfg.num_envs, cfg.cm
+
+    out_dir  = f"/home/adame/torchAirBender/outputs/policies/TT/{cm}"
     os.makedirs(out_dir, exist_ok=True)
 
-    dt, device, num_envs = cfg.dt, cfg.device, cfg.num_envs
-
-    print(f"\n{'='*75}")
-    print(f"  CTBR  |  Envs: {num_envs}  |  Episodes: {cfg.episodes}  |  Steps: {cfg.steps}  |  Horizon: {cfg.truncation}")
-    print(f"{'='*75}\n")
+    print(f"\n{'='*85}")
+    print(f" {'-'*26}  Training Trajectory Tracking  {'-'*26} ")
+    print(f"  Control Mode: {cm}  |  Envs: {num_envs}  |  Episodes: {cfg.episodes}  |  Steps: {cfg.steps}  |  Horizon: {cfg.truncation}")
+    print(f"{'='*85}\n")
 
     quadrotor  = QuadrotorDynamics(cfg)
-    controller = CTBRController(
-        hover_thrust = quadrotor.get_hover_thrust(),
-        alloc_matrix = quadrotor._alloc_matrix,
-        J            = quadrotor.J,
-        dt           = dt,
-        hover_ratio  = cfg.env.max_mass_norm_thrust,
-        w_max        = cfg.env.w_max,
-        kp_rate      = cfg.env.kp_rate,
-    )
+    controller = build_controller(cfg.cm, quadrotor, cfg)
     policy    = MLP(cfg.env.policy, 
                     activation=nn.Tanh, 
                     # activation=nn.ReLU, 
@@ -126,7 +137,7 @@ def train(cfg: DictConfig):
 
             obs     = get_observation(states, pos_ref, vel_ref, acc_ref)
             raw     = policy(obs)
-            actions = controller(raw, states[:, 10:13])
+            actions = controller(states, raw)
             states  = quadrotor.step(states, actions)
 
             dist    = torch.linalg.norm(pos_ref - states[:, 0:3], dim=-1)
@@ -188,7 +199,7 @@ def train(cfg: DictConfig):
     traj_np = traj_env0.cpu().numpy()
 
     actions = traj_np[:, 13:17]  # 4 motors
-    timee = np.arange(cfg.steps) * dt + 0.01
+    timee = np.arange(cfg.steps) * dt 
 
     plt.figure(figsize=(10,5))
 
