@@ -6,7 +6,7 @@ from omegaconf import DictConfig
 
 from utils.nn import MLP
 from utils.randomize import randomize_parameters
-from utils.replay import TrajectoryTrackingRenderer
+from utils.replay_multi import MultiDroneRenderer
 from utils.trajectory import TrajectoryManager
 from utils.math import acc_to_quat
 
@@ -88,6 +88,8 @@ def build_controller(cm_type, quadrotor, cfg):
             kp_rate=cfg.env.kp_rate,
             dt=cfg.dt
         )
+    elif cm_type == "geo":
+        raise ValueError("Geometric control mode is not yet implemented, but will be soon")
     else:
         raise ValueError(f"Unknown control mode: {cm_type}")
     
@@ -106,8 +108,7 @@ def train(cfg: DictConfig):
     quadrotor  = QuadrotorDynamics(cfg)
     controller = build_controller(cfg.cm, quadrotor, cfg)
     policy    = MLP(cfg.env.policy, 
-                    activation=nn.Tanh, 
-                    # activation=nn.ReLU, 
+                    activation=nn.Tanh,      # Tanh seems to work better than ReLU, but a bit more unstable sometimes
                     output_activation=nn.Sigmoid(), 
                     output_bias_init=0.0
                     ).to(device)
@@ -191,27 +192,142 @@ def train(cfg: DictConfig):
         dt             = dt,
     ).run()
 
+    # TODO: Add this to a plotter script to analyze info
+    # import matplotlib.pyplot as plt
+    # import numpy as np
 
-    import matplotlib.pyplot as plt
-    import numpy as np
+    # # convert to cpu numpy
+    # traj_np = traj_env0.cpu().numpy()
 
-    # convert to cpu numpy
-    traj_np = traj_env0.cpu().numpy()
+    # actions = traj_np[:, 13:17]  # 4 motors
+    # timee = np.arange(cfg.steps) * dt 
 
-    actions = traj_np[:, 13:17]  # 4 motors
-    timee = np.arange(cfg.steps) * dt 
+    # plt.figure(figsize=(10,5))
 
-    plt.figure(figsize=(10,5))
+    # plt.plot(timee, actions[:,0], label="motor 1")
+    # plt.plot(timee, actions[:,1], label="motor 2")
+    # plt.plot(timee, actions[:,2], label="motor 3")
+    # plt.plot(timee, actions[:,3], label="motor 4")
 
-    plt.plot(timee, actions[:,0], label="motor 1")
-    plt.plot(timee, actions[:,1], label="motor 2")
-    plt.plot(timee, actions[:,2], label="motor 3")
-    plt.plot(timee, actions[:,3], label="motor 4")
+    # plt.xlabel("Time [s]")
+    # plt.ylabel("Motor command")
+    # plt.title("Quadrotor Actions Over Rollout")
+    # plt.legend()
+    # plt.grid(True)
 
-    plt.xlabel("Time [s]")
-    plt.ylabel("Motor command")
-    plt.title("Quadrotor Actions Over Rollout")
-    plt.legend()
-    plt.grid(True)
+    # plt.show()
 
-    plt.show()
+
+# ==================================================================
+#                    TESTING THE POLICIES
+# ==================================================================
+
+def test(cfg: DictConfig):
+    # ── Manual configuration ─────────────────────────────────────────────
+    policies = [
+        {"cm": "ctbr", "path": "/home/adame/torchAirBender/outputs/policies/TT/ctbr/policy_best.pt", "label": "ctbr_best"},
+        {"cm": "ctbr", "path": "/home/adame/torchAirBender/outputs/policies/TT/ctbr/policy_w1.75.pt", "label": "ctbr_w1.75"},
+        {"cm": "ctbr", "path": "/home/adame/torchAirBender/outputs/policies/TT/ctbr/policy_w1.50.pt", "label": "ctbr_w1.5"},
+        {"cm": "srt",  "path": "/home/adame/torchAirBender/outputs/policies/TT/srt/policy_best.pt",  "label": "srt_best"},
+    ]
+    randomize = True   # set False for identical dynamics across all policies
+    seed      = None
+    # ─────────────────────────────────────────────────────────────────────
+
+    if seed is not None:
+        torch.manual_seed(seed)
+
+    device = cfg.device
+
+    quadrotor = QuadrotorDynamics(cfg)
+
+    # Single shared trajectory, fixed by seed
+    traj = TrajectoryManager.from_harmonics(cfg.env.traj, cfg.num_envs, device)
+    traj.randomize()
+
+    drones   = []
+    ref_traj = None
+
+    for spec in policies:
+        print(f"  Rolling out: {spec['label']}  ({spec['path']})")
+
+        controller = build_controller(spec["cm"], quadrotor, cfg)
+
+        policy = MLP(
+            cfg.env.policy,
+            activation=nn.Tanh,
+            output_activation=nn.Sigmoid(),
+            output_bias_init=0.0,
+        ).to(device)
+        policy.load_state_dict(torch.load(spec["path"], map_location=device))
+        policy.eval()
+
+        # Reset state
+        pos0, vel0, acc0, _ = traj.get_reference(0)
+        states = torch.zeros((cfg.num_envs, 13), device=device)
+        states[:, 0:3]  = pos0.detach()
+        states[:, 3:6]  = vel0.detach()
+        states[:, 6:10] = acc_to_quat(acc0.detach())
+
+        if randomize:
+            params = randomize_parameters(cfg.dynamics, cfg.num_envs, device)
+            quadrotor.set_parameters(params)
+            controller.update_params(
+                alloc_matrix=quadrotor._alloc_matrix,
+                J=quadrotor.J,
+            )
+
+        traj_data = torch.empty((cfg.steps, 20), device=device)
+
+        with torch.no_grad():
+            for t in range(cfg.steps):
+                pos_ref, vel_ref, acc_ref, _ = traj.get_reference(t)
+
+                obs     = get_observation(states, pos_ref, vel_ref, acc_ref)
+                raw     = policy(obs)
+                actions = controller(states, raw)
+                states  = quadrotor.step(states, actions)
+
+                dist    = torch.linalg.norm(pos_ref - states[:, 0:3], dim=-1)
+                too_far = dist > cfg.env.max_dist_to_target
+
+                traj_data[t] = torch.cat(
+                    [states[0].detach(), actions[0].detach(), pos_ref[0].detach()], dim=0
+                )
+
+                states = reset_terminated(states, too_far, pos_ref, vel_ref, acc_ref)
+
+        traj_np  = traj_data.cpu().numpy()
+        ref_traj = ref_traj if ref_traj is not None else traj_np[:, 17:20]
+        
+        DRONE_COLORS = [
+            (0.2, 0.6, 1.0),   # blue
+            (1.0, 0.4, 0.1),   # orange
+            (0.2, 1.0, 0.4),   # green
+            (1.0, 0.2, 0.8),   # pink
+        ]
+        drones.append({
+            "traj":  traj_np,
+            "color": DRONE_COLORS[len(drones) % len(DRONE_COLORS)],
+            "label": spec["label"],
+        })
+
+    # Render
+    last_params = randomize_parameters(cfg.dynamics, 1, device)
+    MultiDroneRenderer(
+        drones         = drones,
+        ref_trajectory = ref_traj,
+        arm_length     = float(last_params.arm_length[0].cpu()),
+        arm_angle      = float(last_params.arm_angle[0].cpu()),
+        mass           = float(last_params.mass[0].cpu()),
+        dt             = cfg.dt,
+    ).run()
+
+    # TrajectoryTrackingRenderer(
+    #     ref_trajectory = ref_traj,
+    #     trajectory     = traj_np,
+    #     arm_length     = float(last_params.arm_length[0].cpu()),
+    #     arm_angle      = float(last_params.arm_angle[0].cpu()),
+    #     mass           = float(last_params.mass[0].cpu()),
+    #     dt             = cfg.dt,
+    # ).run()

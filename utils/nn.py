@@ -26,7 +26,7 @@ class MLP(nn.Module):
         self.output_layer = nn.Linear(layer_sizes[-2], layer_sizes[-1])
 
         # Custom bias initialization (critical for hover initialization)
-        # nn.init.constant_(self.output_layer.bias, output_bias_init)
+        nn.init.constant_(self.output_layer.bias, output_bias_init)
 
         self.hidden = nn.Sequential(*layers)
 

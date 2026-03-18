@@ -42,7 +42,7 @@ def acc_to_quat(acc_ref: Tensor, g: float = 9.81) -> Tensor:
     Returns:
         q_des   : (N, 4)  [w, x, y, z]
     """
-    gravity = torch.tensor([0.0, 0.0, g], device=acc_ref.device)   # acceleration compensation
+    gravity = torch.tensor([0.0, 0.0, g], device=acc_ref.device)   # gravity acceleration compensation
     thrust_dir = acc_ref + gravity                                     # (N, 3)
     thrust_dir = torch.nn.functional.normalize(thrust_dir, dim=-1)    # (N, 3)
 
