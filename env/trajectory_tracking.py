@@ -1,481 +1,232 @@
 import os
 import time
 import torch
-from torch import Tensor
 from torch import nn
+from omegaconf import DictConfig
 
-from omegaconf import DictConfig, OmegaConf             # params loading
-import pandas as pd                                     # for trajectory loading
-
-from utils.nn import MLP 
-from utils.randomize import QuadrotorParams, randomize_parameters
-from utils.replay import TrajectoryTrackingRenderer
-from utils.math import quat_to_rotmat
+from utils.nn import MLP
+from utils.randomize import randomize_parameters
+from utils.replay_multi import MultiDroneRenderer
+from utils.trajectory import TrajectoryManager
+from utils.math import acc_to_quat
 
 from dynamics.quadrotor_dynamics import QuadrotorDynamics
-from controller.controllers import SRTController
+from controller.controllers import SRT, CTBR, LVYR
 
 
-def generate_trajectory_params(
-    num_envs: int,
-    device,
-    cfg: DictConfig
-) -> dict:
-    """
-    Generates random harmonic trajectory coefficients for each environment.
-
-    Returns a dict with tensors of shape (num_envs, 3, num_harmonics):
-        amps     : amplitudes
-        freqs    : frequencies
-        phases   : phases
-        z_offset : scalar float added to z position at eval time
-    """
-    amps   = torch.rand((num_envs, 3, cfg.num_harmonics), device=device) * cfg.A + 0.5
-    freqs  = torch.rand((num_envs, 3, cfg.num_harmonics), device=device) * cfg.w + 0.2
-    phases = torch.rand((num_envs, 3, cfg.num_harmonics), device=device) * cfg.phi * torch.pi
-
-    return {"amps": amps, "freqs": freqs, "phases": phases, "z_offset": cfg.z_offset}
-
-
-def get_target(
-    t: float,
-    params: dict,
-) -> tuple[Tensor, Tensor, Tensor]:
-    """
-    Evaluates the trajectory at time t for all environments.
-
-    Args:
-        t      : current time (scalar float)
-        params : dict from generate_trajectory_params
-
-    Returns:
-        pos : (num_envs, 3)
-        vel : (num_envs, 3)
-        acc : (num_envs, 3)
-    """
-    amps, freqs, phases = params["amps"], params["freqs"], params["phases"]
-
-    t_tensor = torch.full(
-        (amps.shape[0], 1, 1), t, device=amps.device, dtype=amps.dtype
-    )
-
-    angle = freqs * t_tensor + phases                               # (N, 3, H)
-
-    pos = torch.sum(amps * torch.sin(angle),              dim=2)    # (N, 3)
-    vel = torch.sum(amps * freqs * torch.cos(angle),      dim=2)    # (N, 3)
-    acc = torch.sum(-amps * freqs**2 * torch.sin(angle),  dim=2)    # (N, 3)
-
-    # Shift z up so the trajectory stays airborne
-    pos[:, 2] = pos[:, 2] + params["z_offset"]
-    # vel and acc are unaffected (derivative of a constant is 0)
-
-    return pos, vel, acc
-
-def acc_to_quat(acc_ref: Tensor, g: float = 9.81) -> Tensor:
-    """
-    Computes desired quaternion from reference acceleration.
-    Desired thrust direction = acc_ref + gravity_vector.
-
-    Args:
-        acc_ref : (N, 3)
-    Returns:
-        q_des   : (N, 4)  [w, x, y, z]
-    """
-    gravity = torch.tensor([0.0, 0.0, g], device=acc_ref.device)   # acceleration compensation
-    thrust_dir = acc_ref + gravity                                     # (N, 3)
-    thrust_dir = torch.nn.functional.normalize(thrust_dir, dim=-1)    # (N, 3)
-
-    # Body z-axis in world frame should align with thrust_dir
-    # Rotation from world z [0,0,1] to thrust_dir
-    world_z = torch.zeros_like(thrust_dir)
-    world_z[:, 2] = 1.0
-
-    # Axis of rotation = cross(world_z, thrust_dir)
-    axis = torch.linalg.cross(world_z, thrust_dir)                    # (N, 3)
-    # Angle: cos(theta) = dot(world_z, thrust_dir)
-    dot  = (world_z * thrust_dir).sum(dim=-1, keepdim=True)           # (N, 1)
-
-    # Quaternion: w = cos(theta/2), xyz = sin(theta/2) * axis_normalized
-    # Using half-angle: w = sqrt((1 + cos)/2), |xyz| = sqrt((1 - cos)/2)
-    w   = torch.sqrt(torch.clamp((1.0 + dot) / 2.0, min=1e-6))       # (N, 1)
-    xyz = torch.nn.functional.normalize(axis, dim=-1) * torch.sqrt(
-        torch.clamp((1.0 - dot) / 2.0, min=0.0)
-    )                                                                  # (N, 3)
-
-    return torch.cat([w, xyz], dim=-1)                                 # (N, 4)
-
-def reset(
-        cfg: DictConfig,
-        traj_params: dict,
-) -> tuple[Tensor, QuadrotorParams]:
-    """Reset all envs to the trajectory's t=0 position and velocity."""
-    num_envs = cfg.num_envs
-    device   = cfg.device
-
-    pos0, vel0, acc0 = get_target(0.0, traj_params)                   # (N, 3) each
-
-    states = torch.zeros((num_envs, 13), device=device)
+def reset(cfg, traj, quadrotor, controller):
+    pos0, vel0, acc0, _ = traj.get_reference(0)
+    states = torch.zeros((cfg.num_envs, 13), device=cfg.device)
     states[:, 0:3]  = pos0.detach()
-    states[:, 3:6]  = vel0.detach()                                # match target velocity
-    states[:, 6:10] = acc_to_quat(acc0.detach())   
-    # states[:, 6]    = 1.0                                          # quaternion w = 1
+    states[:, 3:6]  = vel0.detach()
+    states[:, 6:10] = acc_to_quat(acc0.detach())
 
-    params = randomize_parameters(cfg.dynamics, num_envs, device)
-
+    params = randomize_parameters(cfg.dynamics, cfg.num_envs, cfg.device)
+    quadrotor.set_parameters(params)
+    controller.update_params(
+        # mass         = quadrotor.m,
+        alloc_matrix = quadrotor._alloc_matrix,
+        J            = quadrotor.J,
+    )
     return states, params
 
 
-def reset_terminated(
-        states: Tensor,
-        terminated: Tensor,     # (N,) bool
-        pos_ref: Tensor,        # (N, 3) current reference position
-        vel_ref: Tensor,        # (N, 3) current reference velocity
-        acc_ref: Tensor,        # (N, 3) current reference velocity
-) -> Tensor:
-    """Snap terminated envs back to current reference position and velocity."""
+def reset_terminated(states, terminated, pos_ref, vel_ref, acc_ref):
     if not terminated.any():
         return states
-
     idx = terminated.nonzero(as_tuple=True)[0]
-
-    states[idx, 0:3]  = pos_ref[idx].detach()
-    states[idx, 3:6]  = vel_ref[idx].detach()                     # match target velocity
-    states[idx, 6:10] = acc_to_quat(acc_ref[idx].detach())
+    states[idx, 0:3]   = pos_ref[idx].detach()
+    states[idx, 3:6]   = vel_ref[idx].detach()
+    states[idx, 6:10]  = acc_to_quat(acc_ref[idx].detach())
     states[idx, 10:13] = 0.0
-    # states[idx, 6]    = 1.0                                        # quaternion w = 1
-
     return states
 
 
-def get_observation(
-        states: Tensor,
-        pos_ref: Tensor,   # (N, 3)
-        vel_ref: Tensor,   # (N, 3)
-        acc_ref: Tensor,   # (N, 3)
-) -> Tensor:
-    p = states[:, 0:3]
-    v = states[:, 3:6]
-    q = states[:, 6:10]
-    w = states[:, 10:13]
+def get_observation(states, pos_ref, vel_ref, acc_ref):
+    return torch.cat([
+        pos_ref - states[:, 0:3],   # position error  (N, 3)
+        vel_ref - states[:, 3:6],   # velocity error  (N, 3)
+        acc_ref,                    # reference acc   (N, 3)
+        states[:, 6:10],            # quaternion      (N, 4)
+        states[:, 10:13],           # body rates      (N, 3)
+    ], dim=-1)                      # (N, 16)
 
-    p_error = pos_ref - p   # (N, 3)
-    v_error = vel_ref - v   # (N, 3)
 
-    return torch.cat([p_error, v_error, acc_ref, q, w], dim=-1)  # (N, 16)
-
-def compute_loss(
-    states: Tensor,
-    pos_ref: Tensor,
-    vel_ref: Tensor,
-    acc_ref: Tensor,
-    weights: DictConfig,
-    mask: Tensor | None = None,
-) -> Tensor:
+def compute_loss(states, pos_ref, vel_ref, acc_ref, weights, mask=None):
     if mask is not None and not mask.any():
         return states.sum() * 0.0
 
-    s = states[mask] if mask is not None else states
-    p = pos_ref[mask] if mask is not None else pos_ref
-    v = vel_ref[mask] if mask is not None else vel_ref
-    a = acc_ref[mask] if mask is not None else acc_ref
+    s, p, v, a = (x[mask] if mask is not None else x
+                  for x in (states, pos_ref, vel_ref, acc_ref))
 
     pos_loss  = torch.linalg.norm(p - s[:, 0:3], dim=-1).mean()
-    vel_loss  = torch.linalg.norm(v - s[:, 3:6], dim=-1).mean()  
+    vel_loss  = torch.linalg.norm(v - s[:, 3:6], dim=-1).mean()
     rate_loss = (s[:, 10:13] ** 2).sum(dim=-1).mean()
 
-    # Orientation loss: angle between actual body-z and desired thrust direction
-    gravity     = torch.tensor([0.0, 0.0, -9.81], device=s.device)
-    thrust_dir  = torch.nn.functional.normalize(a + gravity, dim=-1)  # (N, 3)
-    R           = quat_to_rotmat(s[:, 6:10])                          # (N, 3, 3)
-    body_z      = R[:, :, 2]                                          # (N, 3) — third column
-    cos_angle   = (body_z * thrust_dir).sum(dim=-1).clamp(-1, 1)      # (N,)
-    att_loss    = (1.0 - cos_angle).mean()                            # 0 when aligned, 2 when opposite
+    from utils.math import quat_to_rotmat
+    gravity    = torch.tensor([0., 0., -9.81], device=s.device)
+    thrust_dir = torch.nn.functional.normalize(a + gravity, dim=-1)
+    body_z     = quat_to_rotmat(s[:, 6:10])[:, :, 2]
+    att_loss   = (1.0 - (body_z * thrust_dir).sum(dim=-1).clamp(-1, 1)).mean()
 
-
-    return (weights.pos * pos_loss + weights.vel * vel_loss +  
+    return (weights.pos * pos_loss + weights.vel * vel_loss +
             weights.att * att_loss + weights.body_rates * rate_loss)
 
+def build_controller(cm_type, quadrotor, cfg):
+    # TODO: ideally most of the params should be gotten from quadrotor object
+    if cm_type == "srt":
+        return SRT(
+            # mass=quadrotor.m,
+            # max_TWR=cfg.dynamics.max_TWR,
+            # max_thrust=cfg.dynamics.max_thrust, 
+            # min_thrust=cfg.dynamics.min_thrust
+        )
+    elif cm_type == "ctbr":
+        return CTBR(
+            alloc_matrix=quadrotor._alloc_matrix,
+            J=quadrotor.J,
+            # max_thrust=cfg.dynamics.max_thrust, # TODO
+            # min_thrust=cfg.dynamics.min_thrust,
+            max_rate=cfg.env.w_max,
+            kp_rate=cfg.env.kp_rate,
+            dt=cfg.dt
+        )
+    elif cm_type == "lvyr":
+        return LVYR(
+            inner=CTBR(
+                alloc_matrix=quadrotor._alloc_matrix,
+                J=quadrotor.J,
+                max_rate=cfg.env.w_max,
+                kp_rate=cfg.env.kp_rate,
+                dt=cfg.dt
+            ),
+            m=quadrotor.m,
+            g=quadrotor.g,
+            # max_vel=cfg.env.v_max,
+            # max_yaw_rate=cfg.env.w_max,
+        )
 
-
+    elif cm_type == "lvyr-indi":
+        raise NotImplementedError("INDI inner loop not yet implemented")
+    else:
+        raise ValueError(f"Unknown control mode: {cm_type}")
+    
 def train(cfg: DictConfig):
-    start = time.time()
-    output_dir = "/home/adame/torchAirBender/outputs/policies/TT"
-    os.makedirs(output_dir, exist_ok=True)
+    start    = time.time()
+    dt, device, num_envs, cm = cfg.dt, cfg.device, cfg.num_envs, cfg.cm
 
-    dt         = cfg.dt
-    device     = cfg.device
-    num_envs   = cfg.num_envs
-    episodes   = cfg.episodes
-    steps      = cfg.steps
-    truncation = cfg.truncation
+    out_dir  = f"/home/adame/torchAirBender/outputs/policies/TT/{cm}"
+    os.makedirs(out_dir, exist_ok=True)
 
-    print(f"\n{'='*75}")
-    print(f"  Trajectory Tracking Training")
-    print(f"  Envs: {num_envs}  |  Episodes: {episodes}  |  Steps: {steps}  |  Horizon: {truncation}")
-    print(f"{'='*75}\n")
+    print(f"\n{'='*85}")
+    print(f" {'-'*26}  Training Trajectory Tracking  {'-'*26} ")
+    print(f"  Control Mode: {cm}  |  Envs: {num_envs}  |  Episodes: {cfg.episodes}  |  Steps: {cfg.steps}  |  Horizon: {cfg.truncation}")
+    print(f"{'='*85}\n")
 
-    states = torch.zeros((num_envs, 13), device=device)
-    truncation_losses = torch.empty(truncation, device=device)
-    traj_env0 = torch.empty((steps, 20), device=device)               # 13 state + 4 actions + 3 ref pos
+    quadrotor  = QuadrotorDynamics(cfg)
+    controller = build_controller(cfg.cm, quadrotor, cfg)
+    policy    = MLP(cfg.env.policy, 
+                    activation=nn.Tanh,      # Tanh seems to work better than ReLU, but a bit more unstable sometimes
+                    output_activation=nn.Sigmoid(), 
+                    output_bias_init=0.0
+                    ).to(device)
+    optimizer = torch.optim.Adam(policy.parameters(), lr=cfg.env.lr)
+    traj      = TrajectoryManager.from_harmonics(cfg.env.traj, num_envs, device)
 
-    quadrotor = QuadrotorDynamics(cfg)
-    policy = MLP(
-        layer_sizes=cfg.env.nn,                                        # must be [16, ..., 4]
-        activation=nn.ReLU,
-        output_activation=nn.Sigmoid(),
-        output_bias_init=0.0,
-    ).to(device)
-    # policy.load_state_dict(torch.load(
-    #     "/home/adame/torchAirBender/outputs/policies/TT/trajectory_tracking_w_1.5.pt",
-    #     map_location=device,
-    # ))
+    best_loss    = float("inf")
+    traj_env0    = torch.empty((cfg.steps, 20), device=device)
 
-    # controller = SRTController(cfg)
-    optimizer  = torch.optim.Adam(policy.parameters(), lr=cfg.env.lr)
+    for ep in range(cfg.episodes):
+        traj.randomize()
+        states, last_params = reset(cfg, traj, quadrotor, controller)
 
-    best_loss = float("inf")
-    for ep in range(episodes):
+        ep_loss, num_updates  = 0.0, 0
+        sq_error_sum          = torch.zeros(1, device=device)
+        num_samples           = 0
+        window_loss           = torch.zeros(1, device=device)
+        window_start          = 0
 
-        traj_params       = generate_trajectory_params(num_envs, device, cfg.env.traj)
-
-        # --- episode reset ---
-        states, randomized_params = reset(cfg, traj_params)
-        quadrotor.set_parameters(randomized_params)
-
-        hover_thrust = quadrotor.get_srt_hover()   # per rotor
-        controller   = SRTController(hover_thrust,
-                                      hover_ratio=cfg.env.max_mass_norm_thrust,
-                                      alloc_matrix=quadrotor._alloc_matrix)
-
-        ep_loss    = 0.0
-        num_updates = 0
-
-        for t in range(steps):
-
-            if t % truncation == 0:
+        for t in range(cfg.steps):
+            if t % cfg.truncation == 0:
                 states       = states.detach()
                 window_start = t
-                window_loss_sum = torch.zeros(1, device=device)
+                window_loss  = torch.zeros(1, device=device)
 
-            # --- reference at current time ---
-            pos_ref, vel_ref, acc_ref = get_target(t * dt, traj_params)  # (N, 3) each
-
-            obs     = get_observation(states, pos_ref, vel_ref, acc_ref)
-            raw     = policy(obs)
-            actions, _ = controller(raw)
-            states  = quadrotor.step(state=states, action=actions)
-
-            # --- termination ---
-            dist = torch.linalg.norm(pos_ref - states[:, 0:3], dim=-1)  # (N,)
-            too_far = dist > cfg.env.max_dist_to_target
-            alive = ~too_far
-
-            step_loss = compute_loss(states, pos_ref, vel_ref, acc_ref, cfg.env.loss_weights, mask=alive)
-            truncation_losses[t % truncation] = step_loss.detach()
-            window_loss_sum = window_loss_sum + step_loss
-
-            if ep == episodes - 1:
-                traj_env0[t] = torch.cat([states[0].detach(), actions[0].detach(), pos_ref[0].detach(),], dim=0)
-
-            if (t + 1) % truncation == 0 or (t + 1) == steps:
-                window_len = (t + 1) - window_start
-                loss = window_loss_sum / window_len
-                optimizer.zero_grad()
-                loss.backward()
-                optimizer.step()
-                ep_loss     += truncation_losses[:window_len].mean().item()
-                num_updates += 1
-
-            # --- reset terminated envs ---
-            states = reset_terminated(states, too_far, pos_ref, vel_ref, acc_ref)
-
-
-        avg_ep_loss = ep_loss / num_updates
-        if avg_ep_loss < 1.5:
-            print(f"Saving policy of taj freq w = {cfg.env.traj.w}")
-            torch.save(policy.state_dict(), os.path.join(output_dir, f"trajectory_tracking_w_{cfg.env.traj.w}.pt"))
-            
-            cfg.env.traj.w += 0.25
-            print(f"Increased trajectory frequency to {cfg.env.traj.w} 🔥")
-        
-        print(f"  Episode {ep+1:>4}/{episodes}  |  Avg Loss: {avg_ep_loss:.4f}")
-
-        if avg_ep_loss < best_loss:
-            best_loss = avg_ep_loss
-            torch.save(policy.state_dict(), os.path.join(output_dir, "trajectory_tracking_best.pt"))
-
-    print(f"Total training time: {time.time() - start:.2f}s")
-    torch.save(policy.state_dict(), os.path.join(output_dir, "trajectory_tracking_final.pt"))
-
-    renderer = TrajectoryTrackingRenderer(
-        ref_trajectory=traj_env0[:, 17:20].cpu().numpy(),
-        trajectory=traj_env0.cpu().numpy(),
-        arm_length=float(randomized_params.arm_length[0].cpu()),
-        arm_angle=float(randomized_params.arm_angle[0].cpu()),
-        mass=float(randomized_params.mass[0].cpu()),
-        dt=dt,
-    )
-    renderer.run()
-
-
-
-#==============================================================
-# Load policy and test one env one episode
-#==============================================================
-def load_trajectory(path: str, steps: int, device) -> dict:
-    """
-    Loads a trajectory CSV and returns tensors ready for use in test().
-
-    Returns a dict with:
-        pos : (steps, 3)
-        vel : (steps, 3)
-        acc : (steps, 3)
-        dt  : float  — inferred from the t column
-    """
-    df = pd.read_csv(path)
-
-    assert len(df) >= steps, f"Trajectory too short: {len(df)} rows < {steps} steps"
-
-    pos = torch.tensor(df[["p_x", "p_y", "p_z"]].values[:steps],         dtype=torch.float32, device=device)
-    vel = torch.tensor(df[["v_x", "v_y", "v_z"]].values[:steps],         dtype=torch.float32, device=device)
-    acc = torch.tensor(df[["a_lin_x", "a_lin_y", "a_lin_z"]].values[:steps], dtype=torch.float32, device=device)
-
-    dt = float(df["t"].iloc[1] - df["t"].iloc[0])
-
-    return {"pos": pos, "vel": vel, "acc": acc, "dt": dt}
-
-
-
-def test(cfg: DictConfig):
-    # policy_path = "/home/adame/torchAirBender/outputs/policies/TT/trajectory_tracking_w_2.75.pt"
-    policy_path = "/home/adame/torchAirBender/outputs/policies/TT/trajectory_tracking_best.pt"
-    # policy_path = "/home/adame/torchAirBender/outputs/policies/TT/trajectory_tracking_final.pt"
-    dt      = cfg.dt
-    device  = cfg.device
-    steps   = cfg.steps
-
-    # ── single env ───────────────────────────────────────────────────────
-    cfg_dict = OmegaConf.to_container(cfg, resolve=True)
-    cfg_dict["num_envs"] = 1
-    cfg = OmegaConf.create(cfg_dict)
-
-    # ── load policy ──────────────────────────────────────────────────────
-    policy = MLP(
-        layer_sizes=cfg.env.nn,
-        activation=nn.ReLU,
-        output_activation=nn.Sigmoid(),
-        output_bias_init=0.0,
-    ).to(device)
-    policy.load_state_dict(torch.load(policy_path, map_location=device))
-    policy.eval()
-    print(f"Loaded policy from: {policy_path}")
-
-
-    # ── load trajectory (optional) ─────────────────────────────────────────────────
-    if cfg.get("test_traj", None):
-        print("Loading trajectory!")
-        loaded = load_trajectory(cfg.test_traj, steps, device)
-        # wrap into same interface as get_target — index by step
-        def get_ref(t: int):
-            return (
-                loaded["pos"][t].unsqueeze(0),  # (1, 3)
-                loaded["vel"][t].unsqueeze(0),
-                loaded["acc"][t].unsqueeze(0),
-            )
-    else:
-        traj_params = generate_trajectory_params(1, device, cfg.env.traj)
-        def get_ref(t: int):
-            return get_target(t * dt, traj_params)
-
-
-    # ── init ─────────────────────────────────────────────────────────────
-    # controller = SRTController(cfg)
-
-    pos0, vel0, _ = get_ref(0)
-    states = torch.zeros((1, 13), device=device)
-    states[:, 0:3] = pos0.detach()
-    states[:, 3:6] = vel0.detach()
-    states[:, 6]   = 1.0
-
-    randomized_params = randomize_parameters(cfg.dynamics, 1, device)
-    quadrotor = QuadrotorDynamics(cfg)
-    quadrotor.set_parameters(randomized_params)
-
-    print(randomized_params)
-
-    hover_thrust = quadrotor.get_srt_hover()   # per rotor
-    controller   = SRTController(hover_thrust, hover_ratio=cfg.env.max_mass_norm_thrust, alloc_matrix=quadrotor._alloc_matrix)
-
-    traj = torch.empty((steps, 20), device=device)  # 13 state + 4 actions + 3 ref pos
-
-    print(f"\n{'='*60}")
-    print(" Testing Trajectory Tracking ")
-    print(f"{'='*60}\n")
-
-
-    # ── rollout ──────────────────────────────────────────────────────────
-    total_loss = 0.0
-    sq_error_sum = 0.0
-    with torch.inference_mode():
-        for t in range(steps):
-
-            # pos_ref, vel_ref, acc_ref = get_ref(t * dt, traj_params)
-            pos_ref, vel_ref, acc_ref = get_ref(t)
+            pos_ref, vel_ref, acc_ref, _ = traj.get_reference(t)
 
             obs     = get_observation(states, pos_ref, vel_ref, acc_ref)
             raw     = policy(obs)
-            actions, _ = controller(raw)   # mapping the policy outputs \in [0,1] to motor thrust
-            states  = quadrotor.step(state=states, action=actions)
+            actions = controller(states, raw)
+            states  = quadrotor.step(states, actions)
 
             dist    = torch.linalg.norm(pos_ref - states[:, 0:3], dim=-1)
             too_far = dist > cfg.env.max_dist_to_target
 
-            sq_error_sum += (dist**2).item()  # accumulate mse for logging
+            sq_error_sum += (dist ** 2).sum()
+            num_samples  += dist.numel()
 
-            step_loss   = compute_loss(states, pos_ref, vel_ref, acc_ref, cfg.env.loss_weights)
-            total_loss += step_loss.item()
+            window_loss += compute_loss(
+                states, pos_ref, vel_ref, acc_ref,
+                cfg.env.loss_weights, mask=~too_far
+            )
 
-            traj[t] = torch.cat([states[0], actions[0], pos_ref[0]], dim=0)
+            if ep == cfg.episodes - 1:
+                traj_env0[t] = torch.cat(
+                    [states[0].detach(), actions[0].detach(), pos_ref[0].detach()], dim=0
+                )
 
-            if too_far[0]:
-                print(f"  !! Terminated at step {t+1} — dist: {dist[0]:.3f}")
-                states = reset_terminated(states, too_far, pos_ref, vel_ref, acc_ref)
+            if (t + 1) % cfg.truncation == 0 or (t + 1) == cfg.steps:
+                loss = window_loss / ((t + 1) - window_start)
+                optimizer.zero_grad()
+                loss.backward()
+                optimizer.step()
+                ep_loss     += loss.item()
+                num_updates += 1
 
+            states = reset_terminated(states, too_far, pos_ref, vel_ref, acc_ref)
 
-        print(f"\n  Avg Loss:   {total_loss / steps:.4f}")
-        print(f"  RMSE Pos:   { (sq_error_sum / steps) ** 0.5:.4f} m")
+        avg_loss = ep_loss / max(num_updates, 1)
+        rmse     = torch.sqrt(sq_error_sum / num_samples).item()
+        print(f"  Episode {ep+1:>4}/{cfg.episodes}  |  Loss: {avg_loss:.4f}  |  RMSE: {rmse:.3f} m")
 
-    # ── replay ───────────────────────────────────────────────────────────
-    renderer = TrajectoryTrackingRenderer(
-        ref_trajectory=traj[:, 17:20].cpu().numpy(),
-        trajectory=traj[:, :17].cpu().numpy(),
-        arm_length=float(randomized_params.arm_length[0].cpu()),
-        arm_angle=float(randomized_params.arm_angle[0].cpu()),
-        mass=float(randomized_params.mass[0].cpu()),
-        dt=dt,
-    )
-    renderer.run()
+        if rmse < cfg.env.rmse_threshold:
+            print(f"  >> RMSE threshold reached, w: {cfg.env.traj.w:.2f} → {cfg.env.traj.w + 0.25:.2f} 🔥")
+            torch.save(policy.state_dict(), os.path.join(out_dir, f"policy_w{cfg.env.traj.w:.2f}.pt"))
+            cfg.env.traj.w += 0.25
 
+        if avg_loss < best_loss:
+            best_loss = avg_loss
+            torch.save(policy.state_dict(), os.path.join(out_dir, "policy_best.pt"))
 
+    torch.save(policy.state_dict(), os.path.join(out_dir, "policy_final.pt"))
+    print(f"\nTotal training time: {time.time() - start:.1f}s")
 
+    MultiDroneRenderer(
+        # drones         = traj_env0.cpu().numpy(),
+        trajectory         = traj_env0.cpu().numpy(),
+        ref_trajectory = traj_env0[:, 17:20].cpu().numpy(),
+        arm_length     = float(last_params.arm_length[0].cpu()),
+        arm_angle      = float(last_params.arm_angle[0].cpu()),
+        mass           = float(last_params.mass[0].cpu()),
+        dt             = cfg.dt,
+    ).run()
 
-    ### Plotting some stuff for analysis (delte later on)
-
+    # TODO: Add this to a plotter script to analyze info
     import matplotlib.pyplot as plt
     import numpy as np
 
     # convert to cpu numpy
-    traj_np = traj.cpu().numpy()
+    traj_np = traj_env0.cpu().numpy()
 
     actions = traj_np[:, 13:17]  # 4 motors
-    time = np.arange(steps) * dt
+    timee = np.arange(cfg.steps) * dt 
 
     plt.figure(figsize=(10,5))
 
-    plt.plot(time, actions[:,0], label="motor 1")
-    plt.plot(time, actions[:,1], label="motor 2")
-    plt.plot(time, actions[:,2], label="motor 3")
-    plt.plot(time, actions[:,3], label="motor 4")
+    plt.plot(timee, actions[:,0], label="motor 1")
+    plt.plot(timee, actions[:,1], label="motor 2")
+    plt.plot(timee, actions[:,2], label="motor 3")
+    plt.plot(timee, actions[:,3], label="motor 4")
 
     plt.xlabel("Time [s]")
     plt.ylabel("Motor command")
@@ -484,3 +235,108 @@ def test(cfg: DictConfig):
     plt.grid(True)
 
     plt.show()
+
+
+# ==================================================================
+#                    TESTING THE POLICIES
+# ==================================================================
+
+def test(cfg: DictConfig):
+    # ── Manual configuration ─────────────────────────────────────────────
+    policies = [
+        {"cm": "srt",  
+        "path": "/home/adame/torchAirBender/outputs/policies/TT/srt/policy_final.pt",  
+        "label": "srt_best",
+        "color": (0.2, 1.0, 0.4)},
+
+        {"cm": "ctbr", 
+         "path": "/home/adame/torchAirBender/outputs/policies/TT/ctbr/policy_final.pt", 
+         "label": "ctbr_best",
+         "color": (0.2, 0.6, 1.0)}
+    ]
+    randomize = True   # set False for identical dynamics across all policies
+    seed      = None
+    # ─────────────────────────────────────────────────────────────────────
+
+    if seed is not None:
+        torch.manual_seed(seed)
+
+    device = cfg.device
+
+    quadrotor = QuadrotorDynamics(cfg)
+
+    # Single shared trajectory, fixed by seed
+    traj = TrajectoryManager.from_harmonics(cfg.env.traj, cfg.num_envs, device)
+    traj.randomize()
+
+    drones   = []
+    ref_traj = None
+
+    for spec in policies:
+        print(f"  Rolling out: {spec['label']}  ({spec['path']})")
+
+        controller = build_controller(spec["cm"], quadrotor, cfg)
+
+        policy = MLP(
+            cfg.env.policy,
+            activation=nn.Tanh,
+            output_activation=nn.Sigmoid(),
+            output_bias_init=0.0,
+        ).to(device)
+        policy.load_state_dict(torch.load(spec["path"], map_location=device))
+        policy.eval()
+
+        # Reset state
+        pos0, vel0, acc0, _ = traj.get_reference(0)
+        states = torch.zeros((cfg.num_envs, 13), device=device)
+        states[:, 0:3]  = pos0.detach()
+        states[:, 3:6]  = vel0.detach()
+        states[:, 6:10] = acc_to_quat(acc0.detach())
+
+        if randomize:
+            params = randomize_parameters(cfg.dynamics, cfg.num_envs, device)
+            quadrotor.set_parameters(params)
+            controller.update_params(
+                alloc_matrix=quadrotor._alloc_matrix,
+                J=quadrotor.J,
+            )
+
+        traj_data = torch.empty((cfg.steps, 20), device=device)
+
+        with torch.no_grad():
+            for t in range(cfg.steps):
+                pos_ref, vel_ref, acc_ref, _ = traj.get_reference(t)
+
+                obs     = get_observation(states, pos_ref, vel_ref, acc_ref)
+                raw     = policy(obs)
+                actions = controller(states, raw)
+                states  = quadrotor.step(states, actions)
+
+                dist    = torch.linalg.norm(pos_ref - states[:, 0:3], dim=-1)
+                too_far = dist > cfg.env.max_dist_to_target
+
+                traj_data[t] = torch.cat(
+                    [states[0].detach(), actions[0].detach(), pos_ref[0].detach()], dim=0
+                )
+
+                states = reset_terminated(states, too_far, pos_ref, vel_ref, acc_ref)
+
+        traj_np  = traj_data.cpu().numpy()
+        ref_traj = ref_traj if ref_traj is not None else traj_np[:, 17:20]
+        
+        drones.append({
+            "traj":  traj_np,
+            "color": spec.get("color", (0.2, 0.6, 1.0)),
+            "label": spec["label"],
+        })
+
+    # Render
+    last_params = randomize_parameters(cfg.dynamics, 1, device)   # TODO: This is wrong...params should be saved in drones list...
+    MultiDroneRenderer(
+        drones         = drones,
+        ref_trajectory = ref_traj,
+        arm_length     = float(last_params.arm_length[0].cpu()),
+        arm_angle      = float(last_params.arm_angle[0].cpu()),
+        mass           = float(last_params.mass[0].cpu()),
+        dt             = cfg.dt,
+    ).run()

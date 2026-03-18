@@ -2,7 +2,7 @@ import torch
 from omegaconf import DictConfig
 
 from dynamics.quadrotor_dynamics import QuadrotorDynamics
-from controller.controllers import SRTController
+from controller.controllers_old import SRTController
 from utils.randomize import randomize_parameters
 from utils.replay import BaseRenderer
 

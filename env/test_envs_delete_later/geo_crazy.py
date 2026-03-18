@@ -11,7 +11,7 @@ from utils.trajectory import TrajectoryManager
 from utils.math import acc_to_quat
 
 from dynamics.quadrotor_dynamics import QuadrotorDynamics
-from controller.controllers import CTBRController, DFGC
+from controller.controllers_old import CTBRController, DFGC
 
 
 def reset(cfg, traj, quadrotor, controller):

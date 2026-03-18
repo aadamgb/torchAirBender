@@ -110,7 +110,7 @@ def randomize_parameters(
         noise = torch.empty_like(x).uniform_(-cfg.nf, cfg.nf)
         return x * (1 + noise)
     
-    def add_noise_J(J):
+    def add_noise_diag_vec(J):
         noise = torch.empty_like(J)
         noise[:,0].uniform_(-cfg.nf, cfg.nf)   # Jx
         noise[:,1].uniform_(-cfg.nf, cfg.nf)   # Jy
@@ -118,9 +118,9 @@ def randomize_parameters(
         return J * (1 + noise)
 
     mass = add_noise(mass)
-    l = add_noise(l)
-    alpha = add_noise(alpha)   # careful with this one, it can be a bit problematic
-    J = add_noise_J(J)  # TODO: Add elemntwise noise
+    l = add_noise(l)    # careful with this one, it can be a bit problematic for srt
+    alpha = add_noise(alpha)   
+    J = add_noise_diag_vec(J)  
     # kf = add_noise(kf)
     km = add_noise(km)
     # motor_tau = add_noise(motor_tau)

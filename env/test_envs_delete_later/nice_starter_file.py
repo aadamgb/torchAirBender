@@ -8,7 +8,7 @@ from utils.replay import RacingRenderer
 from utils.math import quat_to_rotmat
 
 from dynamics.quadrotor_dynamics import QuadrotorDynamics
-from controller.controllers import AttitudeGeometricController, DFGeometricController
+from controller.controllers_old import AttitudeGeometricController, DFGeometricController
 from miscellaneous.loader import load_gates_from_yaml, load_TOGT
 
 

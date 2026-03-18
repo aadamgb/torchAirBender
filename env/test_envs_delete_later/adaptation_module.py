@@ -13,7 +13,7 @@ from utils.replay import TrajectoryTrackingRenderer
 from utils.math import quat_to_rotmat
 
 from dynamics.quadrotor_dynamics import QuadrotorDynamics
-from controller.controllers import SRTController
+from controller.controllers_old import SRTController
 
 
 def generate_trajectory_params(

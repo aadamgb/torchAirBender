@@ -7,7 +7,7 @@ from omegaconf import DictConfig
 
 
 from dynamics.quadrotor_dynamics import QuadrotorDynamics
-from controller.controllers import AttitudeGeometricController, DFGC, CTBR, CTBRController
+from controller.controllers_old import AttitudeGeometricController, DFGC, CTBR, CTBRController
 from miscellaneous.loader import load_gates_from_yaml, load_TOGT
 
 from utils.nn import MLP 

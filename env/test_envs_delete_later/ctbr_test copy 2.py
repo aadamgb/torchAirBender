@@ -9,7 +9,7 @@ from utils.randomize import QuadrotorParams, randomize_parameters
 from utils.replay import TrajectoryTrackingRenderer
 from utils.math import quat_to_rotmat
 from dynamics.quadrotor_dynamics import QuadrotorDynamics
-from controller.controllers import CTBRController
+from controller.controllers_old import CTBRController
 
 def acc_to_quat(acc_ref: Tensor, g: float = 9.81) -> Tensor:
     """
