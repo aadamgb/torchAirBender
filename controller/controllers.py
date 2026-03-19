@@ -96,7 +96,8 @@ class LVYR:
         self.kw           = kw
         self.max_vel      = max_vel
         self.max_yaw_rate = max_yaw_rate
-        self.gain_scale   = gain_scale
+        # self.gain_scale   = gain_scale
+        self.gain_scale   = torch.tensor(gain_scale, dtype=torch.float32, device="cuda")  #TODO: Ugly fix...
 
     def update_params(self, alloc_matrix=None, J=None, kv=None, kR=None, kw=None):
         if alloc_matrix is not None:

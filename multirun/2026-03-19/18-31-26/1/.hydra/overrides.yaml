@@ -1,0 +1,5 @@
+- env=tt
+- num_envs=1024
+- steps=800
+- cm=lvyr+g
+- episodes=20

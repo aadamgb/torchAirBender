@@ -123,7 +123,7 @@ def train(cfg: DictConfig):
 
     quadrotor  = QuadrotorDynamics(cfg)
     controller = build_controller(cm, quadrotor, cfg)
-    policy    = MLP(layer_sizes=list(cfg.env.policy[:-1]) + [ACT_DIMS[cm]], 
+    policy    = MLP(layer_sizes=list(cfg.env.policy) + [ACT_DIMS[cm]], 
                     activation=nn.Tanh,                             # Tanh seems to work better than ReLU, but a bit more unstable sometimes
                     output_activation=nn.Sigmoid(), 
                     output_bias_init=0.0
@@ -132,7 +132,7 @@ def train(cfg: DictConfig):
     traj      = TrajectoryManager.from_harmonics(cfg.env.traj, num_envs, device)
 
     best_loss    = float("inf")
-    traj_env0    = torch.empty((cfg.steps, 27), device=device)
+    traj_env0    = torch.empty((cfg.steps, 16 + 4 + ACT_DIMS[cm]), device=device)
 
     for ep in range(cfg.episodes):
         traj.randomize()
@@ -219,44 +219,44 @@ def train(cfg: DictConfig):
     # ).run()
 
     # # TODO: Add this to a plotter script to analyze info
-    import matplotlib.pyplot as plt
-    import numpy as np
+    # import matplotlib.pyplot as plt
+    # import numpy as np
 
-    # convert to cpu numpy
-    traj_np = traj_env0.cpu().numpy()
+    # # convert to cpu numpy
+    # traj_np = traj_env0.cpu().numpy()
 
-    timee = np.arange(cfg.steps) * dt 
+    # timee = np.arange(cfg.steps) * dt 
 
-    # Plot motor commands
-    plt.figure(figsize=(10, 5))
-    actions = traj_np[:, 13:17]  # 4 motors
-    plt.plot(timee, actions[:, 0], label="motor 1")
-    plt.plot(timee, actions[:, 1], label="motor 2")
-    plt.plot(timee, actions[:, 2], label="motor 3")
-    plt.plot(timee, actions[:, 3], label="motor 4")
-    plt.xlabel("Time [s]")
-    plt.ylabel("Motor command")
-    plt.title("Quadrotor Motor Commands Over Rollout")
-    plt.legend()
-    plt.grid(True)
-    plt.show()
+    # # Plot motor commands
+    # plt.figure(figsize=(10, 5))
+    # actions = traj_np[:, 13:17]  # 4 motors
+    # plt.plot(timee, actions[:, 0], label="motor 1")
+    # plt.plot(timee, actions[:, 1], label="motor 2")
+    # plt.plot(timee, actions[:, 2], label="motor 3")
+    # plt.plot(timee, actions[:, 3], label="motor 4")
+    # plt.xlabel("Time [s]")
+    # plt.ylabel("Motor command")
+    # plt.title("Quadrotor Motor Commands Over Rollout")
+    # plt.legend()
+    # plt.grid(True)
+    # plt.show()
 
-    # Plot control gains
-    plt.figure(figsize=(10, 5))
-    actions = traj_np[:, 20:27]  # control commands and gains
-    plt.plot(timee, actions[:, 0] * 10.0, label="vx")
-    plt.plot(timee, actions[:, 1] * 10.0, label="vy")
-    plt.plot(timee, actions[:, 2] * 10.0, label="vz")
-    plt.plot(timee, actions[:, 3], label="wz")
-    plt.plot(timee, actions[:, 4] * 5.0, label="kv")
-    plt.plot(timee, actions[:, 5] * 5.0, label="kR")
-    plt.plot(timee, actions[:, 6] * 2.0, label="kW")
-    plt.xlabel("Time [s]")
-    plt.ylabel("Control value")
-    plt.title("Quadrotor Actions Over Rollout")
-    plt.legend()
-    plt.grid(True)
-    plt.show()
+    # # Plot control gains
+    # plt.figure(figsize=(10, 5))
+    # actions = traj_np[:, 20:27]  # control commands and gains
+    # plt.plot(timee, actions[:, 0] * 10.0, label="vx")
+    # plt.plot(timee, actions[:, 1] * 10.0, label="vy")
+    # plt.plot(timee, actions[:, 2] * 10.0, label="vz")
+    # plt.plot(timee, actions[:, 3], label="wz")
+    # plt.plot(timee, actions[:, 4] * 5.0, label="kv")
+    # plt.plot(timee, actions[:, 5] * 5.0, label="kR")
+    # plt.plot(timee, actions[:, 6] * 2.0, label="kW")
+    # plt.xlabel("Time [s]")
+    # plt.ylabel("Control value")
+    # plt.title("Quadrotor Actions Over Rollout")
+    # plt.legend()
+    # plt.grid(True)
+    # plt.show()
 
 
 # ==================================================================
@@ -276,7 +276,11 @@ def test(cfg: DictConfig):
 
         {"cm": "lvyr", 
          "path": "/home/adame/torchAirBender/outputs/policies/TT/lvyr/policy_final.pt", 
-         "color": (1.0, 0.4, 0.1)}
+         "color": (1.0, 0.4, 0.1)},
+
+        {"cm": "lvyr+g", 
+         "path": "/home/adame/torchAirBender/outputs/policies/TT/lvyr+g/policy_final.pt", 
+         "color": (0.8, 0.2, 1.0)},
     ]
     for p in policies:
         p["label"] = p["cm"] + "_" + Path(p["path"]).stem.split("_", 1)[-1]
@@ -302,9 +306,8 @@ def test(cfg: DictConfig):
         print(f"  Rolling out: {spec['label']}  ({spec['path']})")
 
         controller = build_controller(spec["cm"], quadrotor, cfg)
-
         policy = MLP(
-            cfg.env.policy,
+            layer_sizes=list(cfg.env.policy) + [ACT_DIMS[spec["cm"]]],
             activation=nn.Tanh,
             output_activation=nn.Sigmoid(),
             output_bias_init=0.0,
@@ -335,7 +338,12 @@ def test(cfg: DictConfig):
 
                 obs     = get_observation(states, pos_ref, vel_ref, acc_ref)
                 raw     = policy(obs)
-                actions = controller(states, raw)
+                if spec["cm"] == "lvyr+g":
+                    gains = raw[:, 4:7]   # (N, 3) — kv, kR, kw per env
+                    raw   = raw[:, 0:4]   # (N, 4) — the actual control commands
+                    actions = controller(states, raw, gains=gains)
+                else:
+                    actions = controller(states, raw)
                 states  = quadrotor.step(states, actions)
 
                 dist    = torch.linalg.norm(pos_ref - states[:, 0:3], dim=-1)
