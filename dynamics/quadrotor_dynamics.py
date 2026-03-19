@@ -188,7 +188,7 @@ class QuadrotorDynamics:
     # ------------------------------------------------------------------
 
     def _rebuild_alloc_matrix(self):
-        s  = torch.sin(self.arm_angle)
+        s  = torch.sin(self.arm_angle)     # Careful with the units!!!!
         c  = torch.cos(self.arm_angle)
         l  = self.arm_length
         km = self.km
@@ -236,7 +236,7 @@ class QuadrotorDynamics:
         """
         self.m          = params.mass
         self.arm_length = params.arm_length
-        self.arm_angle  = params.arm_angle
+        self.arm_angle  = params.arm_angle * torch.pi / 180
         self.J          = params.J
         self.km         = params.km
         self._rebuild_alloc_matrix()

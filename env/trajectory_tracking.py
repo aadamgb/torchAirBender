@@ -12,8 +12,14 @@ from utils.trajectory import TrajectoryManager
 from utils.math import acc_to_quat
 
 from dynamics.quadrotor_dynamics import QuadrotorDynamics
-from controller.controllers import SRT, CTBR, LVYR
+from controller.controllers import DirectAllocation, SRT, CTBR, LVYR
 
+ACT_DIMS = {
+    "srt":    4,
+    "ctbr":   4,
+    "lvyr":   4,
+    "lvyr+g": 7,
+}
 
 def reset(cfg, traj, quadrotor, controller):
     pos0, vel0, acc0, _ = traj.get_reference(0)
@@ -74,17 +80,13 @@ def compute_loss(states, pos_ref, vel_ref, acc_ref, weights, mask=None):
             weights.att * att_loss + weights.body_rates * rate_loss)
 
 def build_controller(cm_type, quadrotor, cfg):
+    alloc = DirectAllocation(quadrotor._alloc_matrix)
     # TODO: ideally most of the params should be gotten from quadrotor object
     if cm_type == "srt":
-        return SRT(
-            # mass=quadrotor.m,
-            # max_TWR=cfg.dynamics.max_TWR,
-            # max_thrust=cfg.dynamics.max_thrust, 
-            # min_thrust=cfg.dynamics.min_thrust
-        )
+        return SRT()
     elif cm_type == "ctbr":
         return CTBR(
-            alloc_matrix=quadrotor._alloc_matrix,
+            allocator=alloc,
             J=quadrotor.J,
             # max_thrust=cfg.dynamics.max_thrust, # TODO
             # min_thrust=cfg.dynamics.min_thrust,
@@ -92,15 +94,9 @@ def build_controller(cm_type, quadrotor, cfg):
             kp_rate=cfg.env.kp_rate,
             dt=cfg.dt
         )
-    elif cm_type == "lvyr":
+    elif cm_type in ("lvyr", "lvyr_g"):
         return LVYR(
-            inner=CTBR(
-                alloc_matrix=quadrotor._alloc_matrix,
-                J=quadrotor.J,
-                max_rate=cfg.env.w_max,
-                kp_rate=cfg.env.kp_rate,
-                dt=cfg.dt
-            ),
+            allocator=alloc,
             m=quadrotor.m,
             J=quadrotor.J,
             g=quadrotor.g,
@@ -114,6 +110,7 @@ def build_controller(cm_type, quadrotor, cfg):
         raise ValueError(f"Unknown control mode: {cm_type}")
     
 def train(cfg: DictConfig):
+    print(ACT_DIMS[cfg.cm])
     start    = time.time()
     dt, device, num_envs, cm = cfg.dt, cfg.device, cfg.num_envs, cfg.cm
 

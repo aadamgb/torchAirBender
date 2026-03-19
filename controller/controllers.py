@@ -2,6 +2,18 @@ import torch
 from torch.functional import F
 from utils.math import quat_to_rotmat
 
+class DirectAllocation:
+    """Maps wrench to per-motor thrusts by pseudo-inverting the allocation matrix."""
+    def __init__(self, alloc_matrix):
+        self.alloc_inv = torch.linalg.pinv(alloc_matrix)
+
+    def __call__(self, Fz, tau):
+        wrench = torch.cat([Fz, tau], dim=-1)           # (N, 4)
+        return torch.bmm(self.alloc_inv, wrench.unsqueeze(-1)).squeeze(-1)
+
+    def update_params(self, alloc_matrix):
+        self.alloc_inv = torch.linalg.pinv(alloc_matrix)
+
 class SRT:
     def __init__(self, max_thrust=20.0, min_thrust=0.5):
         self.max_thrust = max_thrust
@@ -21,12 +33,13 @@ class SRT:
             self.min_thrust = min_thrust.reshape(-1, 1) if torch.is_tensor(min_thrust) else min_thrust
 
 class CTBR:
-    def __init__(self, alloc_matrix, J, max_thrust=20.0, min_thrust=0.5, max_rate=10.0, kp_rate=1.0, dt=0.01):
+    def __init__(self, allocator, J, max_thrust=20.0, min_thrust=0.5, max_rate=10.0, kp_rate=1.0, dt=0.01):
+        self.allocator  = allocator
         self.max_thrust = max_thrust * 4.0
         self.min_thrust = min_thrust * 4.0 # TODO: fix this xd 
         self.max_rate   = max_rate
         self.kp_rate    = kp_rate
-        self.alloc_inv  = torch.linalg.pinv(alloc_matrix)
+        # self.alloc_inv  = torch.linalg.pinv(alloc_matrix)
         self.J          = J
         self.dt         = dt
 
@@ -35,26 +48,25 @@ class CTBR:
         Fz    =  raw[:, 0:1] * (self.max_thrust - self.min_thrust) + self.min_thrust
         w_des = (raw[:, 1:4] * 2.0 - 1.0) * self.max_rate
         tau = self.J * (self.kp_rate * (w_des - w) / self.dt)  # (N, 3)
-        return self.wrench_to_motors(Fz, tau)
+        return self.allocator(Fz, tau)
     
-    def wrench_to_motors(self, Fz, tau):
-        """
-        Fz    : (N, 1)  physical thrust [N]
-        tau   : (N, 3)  physical torques [Nm]
-        """
-        wrench = torch.cat([Fz, tau], dim=-1)                   # (N, 4)
-        return torch.bmm(self.alloc_inv, wrench.unsqueeze(-1)).squeeze(-1)
+    # def wrench_to_motors(self, Fz, tau):
+    #     """
+    #     Fz    : (N, 1)  physical thrust [N]
+    #     tau   : (N, 3)  physical torques [Nm]
+    #     """
+    #     wrench = torch.cat([Fz, tau], dim=-1)                   # (N, 4)
+    #     return torch.bmm(self.alloc_inv, wrench.unsqueeze(-1)).squeeze(-1)
 
     def update_params(self, alloc_matrix=None, J=None, max_thrust=None, min_thrust=None):
         if alloc_matrix is not None:
-            self.alloc_inv = torch.linalg.pinv(alloc_matrix)
+            self.allocator.update_params(alloc_matrix)
         if J is not None:
             self.J = J
         if max_thrust is not None:
             self.max_thrust = max_thrust.reshape(-1, 1) if torch.is_tensor(max_thrust) else max_thrust
         if min_thrust is not None:
             self.min_thrust = min_thrust.reshape(-1, 1) if torch.is_tensor(min_thrust) else min_thrust
-
 
 
 class LVYR:
@@ -66,7 +78,7 @@ class LVYR:
     """
     def __init__(
         self,
-        inner,
+        allocator,
         m, J, g, 
         kv=1.0,       # linear velocity P gain
         kR=1.0,       # attitude P gain (roll/pitch)
@@ -74,24 +86,25 @@ class LVYR:
         max_vel=5.0,
         max_yaw_rate=1.0,
     ):
-        self.inner       = inner   
-        self.m           = m
-        self.J           = J
-        self.g           = g
-        self.kv          = kv
-        self.kR          = kR
-        self.kw          = kw
-        self.max_vel     = max_vel
+        self.allocator    = allocator   
+        self.m            = m
+        self.J            = J
+        self.g            = g
+        self.kv           = kv
+        self.kR           = kR
+        self.kw           = kw
+        self.max_vel      = max_vel
         self.max_yaw_rate = max_yaw_rate
 
-    def update_params(self, kv=None, kR=None, kw=None, **kwargs):
+    def update_params(self, alloc_matrix=None, J=None, kv=None, kR=None, kw=None):
+        if alloc_matrix is not None:
+            self.allocator.update_params(alloc_matrix)
         if kv is not None:
             self.kv = kv
         if kR is not None:
             self.kR = kR
         if kw is not None:
             self.kw = kw
-        self.inner.update_params(**kwargs)
 
     def __call__(self, state, raw):
         """
@@ -147,10 +160,6 @@ class LVYR:
         Fz = (f_des * b3_cur).sum(dim=-1, keepdim=True)         # (N, 1)
         
         Fz = F.softplus(Fz)
-        tau    = -self.kR * eR - self.kw * eW + gyro
+        tau    = -self.kR * eR - self.kw * eW + gyro        # TODO: Think wether to feedforward term...
 
-
-        # TODO: Think wether to feedforward term...
-
-
-        return self.inner.wrench_to_motors(Fz, tau)
+        return self.allocator(Fz, tau)

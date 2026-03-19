@@ -50,7 +50,7 @@ def randomize_parameters(
     l = c * (l_max - l_min) + l_min
 
     alpha = torch.full(
-        (num_envs,), cfg.arm_angle.nominal, device=device, dtype=dtype
+        (num_envs,), cfg.arm_angle.nominal, device=device, dtype=dtype   # THis is in degrees be carful!!!
     ) # alpha does not scale, only add noise
 
     # ------------------------------------------------------------------
