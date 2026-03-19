@@ -83,8 +83,9 @@ class LVYR:
         kv=1.0,       # linear velocity P gain
         kR=1.0,       # attitude P gain (roll/pitch)
         kw=0.25,
-        max_vel=5.0,
+        max_vel=10.0,
         max_yaw_rate=1.0,
+        gain_scale = [5.0, 5.0, 2.0]
     ):
         self.allocator    = allocator   
         self.m            = m
@@ -95,6 +96,7 @@ class LVYR:
         self.kw           = kw
         self.max_vel      = max_vel
         self.max_yaw_rate = max_yaw_rate
+        self.gain_scale   = gain_scale
 
     def update_params(self, alloc_matrix=None, J=None, kv=None, kR=None, kw=None):
         if alloc_matrix is not None:
@@ -106,12 +108,23 @@ class LVYR:
         if kw is not None:
             self.kw = kw
 
-    def __call__(self, state, raw):
+    def __call__(self, state, raw, gains=None):
         """
         state : (N, 13)
         raw   : (N, 4)  all in [0, 1] from policy
         returns (Fz, wx_des, wy_des, wz_des) as (N, 4) — feeds into CTBR
         """
+
+        # Gain scheduling if cm is lvyr_g
+        if gains is not None:
+            # gains: (N, 3), softplus to keep positive
+            gains = F.softplus(gains) * self.gain_scale  + 0.1  # +0.1 to prevent zero gain values
+            kv = gains[:, 0:1]   # (N, 1)
+            kR = gains[:, 1:2]   # (N, 1)
+            kw = gains[:, 2:3]   # (N, 1)
+        else:
+            kv, kR, kw = self.kv, self.kR, self.kw
+
         # --- Unpack state ---
         vel  = state[:, 3:6]                                            # (N, 3) vx vy vz
         quat = state[:, 6:10]                                           # (N, 4) w x y z
@@ -126,7 +139,7 @@ class LVYR:
 
         # --- Desired force vector in world frame ---
         # Proportional velocity error -> desired acceleration
-        a_des = self.kv * (v_des - vel)               # (N, 3)
+        a_des = kv * (v_des - vel)               # (N, 3)
         # Add gravity compensation on z
         a_des[:, 2] += self.g
         f_des = self.m * a_des                        # (N, 3) world frame force
@@ -160,6 +173,6 @@ class LVYR:
         Fz = (f_des * b3_cur).sum(dim=-1, keepdim=True)         # (N, 1)
         
         Fz = F.softplus(Fz)
-        tau    = -self.kR * eR - self.kw * eW + gyro        # TODO: Think wether to feedforward term...
+        tau    = -kR * eR - kw * eW + gyro        # TODO: Think wether to feedforward term...
 
         return self.allocator(Fz, tau)
