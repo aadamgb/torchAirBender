@@ -34,15 +34,14 @@ class CTBR:
         w = state[:, 10:13]
         Fz    =  raw[:, 0:1] * (self.max_thrust - self.min_thrust) + self.min_thrust
         w_des = (raw[:, 1:4] * 2.0 - 1.0) * self.max_rate
-        return self.from_wrench(state, Fz, w_des)
+        tau = self.J * (self.kp_rate * (w_des - w) / self.dt)  # (N, 3)
+        return self.wrench_to_motors(Fz, tau)
     
-    def from_wrench(self, state, Fz, w_des):
+    def wrench_to_motors(self, Fz, tau):
         """
         Fz    : (N, 1)  physical thrust [N]
-        w_des : (N, 3)  desired body rates [rad/s]
+        tau   : (N, 3)  physical torques [Nm]
         """
-        w   = state[:, 10:13]
-        tau = self.J * (self.kp_rate * (w_des - w) / self.dt)  # (N, 3)
         wrench = torch.cat([Fz, tau], dim=-1)                   # (N, 4)
         return torch.bmm(self.alloc_inv, wrench.unsqueeze(-1)).squeeze(-1)
 
@@ -68,25 +67,30 @@ class LVYR:
     def __init__(
         self,
         inner,
-        m, g,
-        kv=2.0,       # linear velocity P gain
-        kR=8.0,       # attitude P gain (roll/pitch)
+        m, J, g, 
+        kv=1.0,       # linear velocity P gain
+        kR=1.0,       # attitude P gain (roll/pitch)
+        kw=0.25,
         max_vel=5.0,
         max_yaw_rate=1.0,
     ):
         self.inner       = inner   
         self.m           = m
+        self.J           = J
         self.g           = g
         self.kv          = kv
         self.kR          = kR
+        self.kw          = kw
         self.max_vel     = max_vel
         self.max_yaw_rate = max_yaw_rate
 
-    def update_params(self, kv=None, kR=None, **kwargs):
+    def update_params(self, kv=None, kR=None, kw=None, **kwargs):
         if kv is not None:
             self.kv = kv
         if kR is not None:
             self.kR = kR
+        if kw is not None:
+            self.kw = kw
         self.inner.update_params(**kwargs)
 
     def __call__(self, state, raw):
@@ -98,6 +102,7 @@ class LVYR:
         # --- Unpack state ---
         vel  = state[:, 3:6]                                            # (N, 3) vx vy vz
         quat = state[:, 6:10]                                           # (N, 4) w x y z
+        w    = state[:, 10:13]                                          # (N, 3) wx wy wz
 
         R = quat_to_rotmat(quat)                                        # (N, 3, 3)
         yaw = torch.atan2(R[:, 1, 0], R[:, 0, 0])
@@ -126,23 +131,26 @@ class LVYR:
         R_des = torch.stack([b1_des, b2_des, b3_des], dim=-1)  # (N, 3, 3) column-major
 
         # --- SO(3) attitude error (vee map of skew-symmetric part) ---
-        # eR = 0.5 * vee( R_des^T R - R^T R_des )
         RdTR   = torch.bmm(R_des.transpose(-1, -2), R)
         skew   = RdTR - RdTR.transpose(-1, -2)                                                # (N, 3, 3) skew-sym
         eR = 0.5 * torch.stack([skew[:, 2, 1], skew[:, 0, 2], skew[:, 1, 0]], dim=-1)         # (N, 3)
 
-        # --- Desired body rates from attitude error + yaw rate feedforward ---
-        w_des = self.kR * eR                                                                  # (N, 3)
-        # Inject yaw rate command on body z
+        RTRd   = torch.bmm(R.transpose(-1, -2), R_des)
+        w_des = torch.zeros_like(w)
         w_des[:, 2:3] = yaw_rate_des
+        eW = w - torch.bmm(RTRd, w_des.unsqueeze(-1)).squeeze(-1)
+
+        gyro = torch.linalg.cross(w, self.J * w)
 
         # --- Total thrust magnitude projected onto body z ---
         b3_cur = R[:, :, 2]                                     # (N, 3) current z-axis
         Fz = (f_des * b3_cur).sum(dim=-1, keepdim=True)         # (N, 1)
         
         Fz = F.softplus(Fz)
+        tau    = -self.kR * eR - self.kw * eW + gyro
 
 
-        # TODO: Think wether to add eW, gyro and feedforward terms...
+        # TODO: Think wether to feedforward term...
 
-        return self.inner.from_wrench(state, Fz, w_des)  
+
+        return self.inner.wrench_to_motors(Fz, tau)

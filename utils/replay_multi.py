@@ -237,7 +237,7 @@ class BaseRenderer:
 
     def _draw_hud(self, window, frame, paused, show_axes, show_ground):
         """Override in subclasses to customize the HUD."""
-        with window.GUI.sub_window("Info", 0.01, 0.01, 0.25, 0.12) as sw:
+        with window.GUI.sub_window("Info", 0.01, 0.01, 0.95, 0.12) as sw:
             sw.text(f"Frame : {frame} / {self._T - 1}")
             sw.text(f"Time  : {frame * self._dt:.2f} s")
             sw.text(f"{'[PAUSED]' if paused else '[PLAYING]'}  Space=pause")
@@ -492,13 +492,17 @@ class MultiDroneRenderer(BaseRenderer):
     # ------------------------------------------------------------------
 
     def _draw_hud(self, window, frame, paused, show_axes, show_ground):
-        hud_h = 0.10 + self._n * 0.055
-        with window.GUI.sub_window("Info", 0.01, 0.01, 0.36, hud_h) as sw:
+        hud_h = 0.07 + self._n * 0.055
+        with window.GUI.sub_window("Info", 0.01, 0.01, 0.25, hud_h) as sw:
             sw.text(f"Frame: {frame} / {self._T - 1}   Time: {frame * self._dt:.2f}s")
             sw.text(f"{'[PAUSED]' if paused else '[PLAYING]'}  Space=pause  R=restart")
             for d, drone in enumerate(self._drones):
-                pos = self._all_centers[d][frame]   # Taichi coords
-                sw.text(f"  {drone['label']:14s}  ({pos[0]:.2f}, {-pos[2]:.2f}, {pos[1]:.2f})")
+                pos = self._all_centers[d][frame]
+                c   = drone["color"]
+                sw.text(
+                    f"  {drone['label']:14s}  ({pos[0]:.2f}, {-pos[2]:.2f}, {pos[1]:.2f})",
+                    color=(c[0], c[1], c[2])
+                )
 
 
 # ---------------------------------------------------------------------------

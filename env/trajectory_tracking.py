@@ -3,6 +3,7 @@ import time
 import torch
 from torch import nn
 from omegaconf import DictConfig
+from pathlib import Path
 
 from utils.nn import MLP
 from utils.randomize import randomize_parameters
@@ -101,6 +102,7 @@ def build_controller(cm_type, quadrotor, cfg):
                 dt=cfg.dt
             ),
             m=quadrotor.m,
+            J=quadrotor.J,
             g=quadrotor.g,
             # max_vel=cfg.env.v_max,
             # max_yaw_rate=cfg.env.w_max,
@@ -201,40 +203,40 @@ def train(cfg: DictConfig):
     torch.save(policy.state_dict(), os.path.join(out_dir, "policy_final.pt"))
     print(f"\nTotal training time: {time.time() - start:.1f}s")
 
-    MultiDroneRenderer(
-        # drones         = traj_env0.cpu().numpy(),
-        trajectory         = traj_env0.cpu().numpy(),
-        ref_trajectory = traj_env0[:, 17:20].cpu().numpy(),
-        arm_length     = float(last_params.arm_length[0].cpu()),
-        arm_angle      = float(last_params.arm_angle[0].cpu()),
-        mass           = float(last_params.mass[0].cpu()),
-        dt             = cfg.dt,
-    ).run()
+    # MultiDroneRenderer(
+    #     # drones         = traj_env0.cpu().numpy(),
+    #     trajectory         = traj_env0.cpu().numpy(),
+    #     ref_trajectory = traj_env0[:, 17:20].cpu().numpy(),
+    #     arm_length     = float(last_params.arm_length[0].cpu()),
+    #     arm_angle      = float(last_params.arm_angle[0].cpu()),
+    #     mass           = float(last_params.mass[0].cpu()),
+    #     dt             = cfg.dt,
+    # ).run()
 
-    # TODO: Add this to a plotter script to analyze info
-    import matplotlib.pyplot as plt
-    import numpy as np
+    # # TODO: Add this to a plotter script to analyze info
+    # import matplotlib.pyplot as plt
+    # import numpy as np
 
-    # convert to cpu numpy
-    traj_np = traj_env0.cpu().numpy()
+    # # convert to cpu numpy
+    # traj_np = traj_env0.cpu().numpy()
 
-    actions = traj_np[:, 13:17]  # 4 motors
-    timee = np.arange(cfg.steps) * dt 
+    # actions = traj_np[:, 13:17]  # 4 motors
+    # timee = np.arange(cfg.steps) * dt 
 
-    plt.figure(figsize=(10,5))
+    # plt.figure(figsize=(10,5))
 
-    plt.plot(timee, actions[:,0], label="motor 1")
-    plt.plot(timee, actions[:,1], label="motor 2")
-    plt.plot(timee, actions[:,2], label="motor 3")
-    plt.plot(timee, actions[:,3], label="motor 4")
+    # plt.plot(timee, actions[:,0], label="motor 1")
+    # plt.plot(timee, actions[:,1], label="motor 2")
+    # plt.plot(timee, actions[:,2], label="motor 3")
+    # plt.plot(timee, actions[:,3], label="motor 4")
 
-    plt.xlabel("Time [s]")
-    plt.ylabel("Motor command")
-    plt.title("Quadrotor Actions Over Rollout")
-    plt.legend()
-    plt.grid(True)
+    # plt.xlabel("Time [s]")
+    # plt.ylabel("Motor command")
+    # plt.title("Quadrotor Actions Over Rollout")
+    # plt.legend()
+    # plt.grid(True)
 
-    plt.show()
+    # plt.show()
 
 
 # ==================================================================
@@ -246,14 +248,18 @@ def test(cfg: DictConfig):
     policies = [
         {"cm": "srt",  
         "path": "/home/adame/torchAirBender/outputs/policies/TT/srt/policy_final.pt",  
-        "label": "srt_best",
-        "color": (0.2, 1.0, 0.4)},
+        "color": (0.2, 1.0, 0.4)}, 
 
         {"cm": "ctbr", 
          "path": "/home/adame/torchAirBender/outputs/policies/TT/ctbr/policy_final.pt", 
-         "label": "ctbr_best",
-         "color": (0.2, 0.6, 1.0)}
+         "color": (0.2, 0.6, 1.0)},
+
+        {"cm": "lvyr", 
+         "path": "/home/adame/torchAirBender/outputs/policies/TT/lvyr/policy_final.pt", 
+         "color": (1.0, 0.4, 0.1)}
     ]
+    for p in policies:
+        p["label"] = p["cm"] + "_" + Path(p["path"]).stem.split("_", 1)[-1]
     randomize = True   # set False for identical dynamics across all policies
     seed      = None
     # ─────────────────────────────────────────────────────────────────────
