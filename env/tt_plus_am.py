@@ -128,21 +128,34 @@ def train(cfg: DictConfig):
     quadrotor  = QuadrotorDynamics(cfg)
     controller = build_controller(cm, quadrotor, cfg)
     policy    = MLP(layer_sizes=list(cfg.env.policy) + [ACT_DIMS[cm]], 
-                    # activation=nn.Tanh,                             # Tanh seems to work better than ReLU, but a bit more unstable sometimes
-                    activation=nn.ReLU,                             # Tanh seems to work better than ReLU, but a bit more unstable sometimes
+                    activation=nn.Tanh,                             # Tanh seems to work better than ReLU, but a bit more unstable sometimes
+                    # activation=nn.ReLU,                             # Tanh seems to work better than ReLU, but a bit more unstable sometimes
                     output_activation=nn.Sigmoid(), 
                     output_bias_init=0.0
                     ).to(device)
     optimizer = torch.optim.Adam(policy.parameters(), lr=cfg.env.lr)
-    traj      = TrajectoryManager.from_harmonics(cfg.env.traj, num_envs, device)
+    # traj      = TrajectoryManager.from_harmonics(cfg.env.traj, num_envs, device)
+    # NOTE: Temporary Testing Trajectory
+
+    
 
     best_loss    = float("inf")
 
     # ── Extended buffer: states(13) | actions(4) | p_ref(3) | v_ref(3) | a_ref(3) = 26 cols
     traj_data = torch.empty((cfg.steps, 26), device=device)
+    speed = 1.0
 
     for ep in range(cfg.episodes):
-        traj.randomize()
+        # traj.randomize()
+        traj = HypotrochoidTrajectory(
+            num_envs=cfg.num_envs, 
+            device=device, 
+            R=5.0, 
+            r=3.0, 
+            d=5.0, 
+            speed=speed, # Adjust speed as needed for your controller's limits
+            dt=cfg.dt
+        )
         states, last_params = reset(cfg, traj, quadrotor, controller)
 
         ep_loss, num_updates  = 0.0, 0
@@ -196,6 +209,8 @@ def train(cfg: DictConfig):
                 loss = window_loss / ((t + 1) - window_start)
                 optimizer.zero_grad()
                 loss.backward()
+                total_norm = torch.nn.utils.clip_grad_norm_(policy.parameters(), max_norm=float('inf'))
+                print(f"Grad norm: {total_norm:.4f}") if (t + 1) == cfg.steps else None
                 optimizer.step()
                 ep_loss     += loss.item()
                 num_updates += 1
@@ -210,6 +225,7 @@ def train(cfg: DictConfig):
             print(f"  >> RMSE threshold reached, w: {cfg.env.traj.w:.2f} → {cfg.env.traj.w + 0.25:.2f} 🔥")
             torch.save(policy.state_dict(), os.path.join(out_dir, f"policy_w{cfg.env.traj.w:.2f}.pt"))
             cfg.env.traj.w += 0.25
+            speed += 0.25
 
         if avg_loss < best_loss:
             best_loss = avg_loss
@@ -218,25 +234,25 @@ def train(cfg: DictConfig):
     torch.save(policy.state_dict(), os.path.join(out_dir, "policy_final.pt"))
     print(f"\nTotal training time: {time.time() - start:.1f}s")
     
-    # traj_np = traj_data.cpu().numpy()
-    # plot_rollout(
-    #     traj_np        = traj_np,
-    #     dt             = cfg.dt,
-    #     label          = cfg.cm,
-    #     arm_length     = float(last_params.arm_length[0].cpu()),
-    #     arm_angle      = float(last_params.arm_angle[0].cpu()),
-    #     mass           = float(last_params.mass[0].cpu()),
-    #     # save_path = f"outputs/{spec['label']}_plot.png",  # uncomment to save instead of show
-    # )
-    # MultiDroneRenderer(
-    #     # drones         = traj_env0.cpu().numpy(),
-    #     trajectory          = traj_np ,
-    #     ref_trajectory      = traj_np[:, 17:20],
-    #     arm_length          = float(last_params.arm_length[0].cpu()),
-    #     arm_angle           = float(last_params.arm_angle[0].cpu()),
-    #     mass                = float(last_params.mass[0].cpu()),
-    #     dt                  = cfg.dt,
-    # ).run()
+    traj_np = traj_data.cpu().numpy()
+    plot_rollout(
+        traj_np        = traj_np,
+        dt             = cfg.dt,
+        label          = cfg.cm,
+        arm_length     = float(last_params.arm_length[0].cpu()),
+        arm_angle      = float(last_params.arm_angle[0].cpu()),
+        mass           = float(last_params.mass[0].cpu()),
+        # save_path = f"outputs/{spec['label']}_plot.png",  # uncomment to save instead of show
+    )
+    MultiDroneRenderer(
+        # drones         = traj_env0.cpu().numpy(),
+        trajectory          = traj_np ,
+        ref_trajectory      = traj_np[:, 17:20],
+        arm_length          = float(last_params.arm_length[0].cpu()),
+        arm_angle           = float(last_params.arm_angle[0].cpu()),
+        mass                = float(last_params.mass[0].cpu()),
+        dt                  = cfg.dt,
+    ).run()
 
     # # TODO: Add this to a plotter script to analyze info
     # import matplotlib.pyplot as plt
@@ -287,20 +303,20 @@ def test(cfg: DictConfig):
     # ── Manual configuration ─────────────────────────────────────────────
     policies = [
         # {"cm": "srt",  
-        # "path": "/home/adame/torchAirBender/outputs/policies/TT/srt/policy_final.pt",  
+        # "path": "/home/adame/torchAirBender/outputs/policies/TT-AM/srt/policy_w1.00.pt",  
         # "color": (0.2, 1.0, 0.4)}, 
 
         # {"cm": "ctbr", 
-        #  "path": "/home/adame/torchAirBender/outputs/policies/TT/ctbr/policy_final.pt", 
+        #  "path": "/home/adame/torchAirBender/outputs/policies/TT-AM/ctbr/policy_w1.50.pt", 
         #  "color": (0.2, 0.6, 1.0)},
 
         {"cm": "lvyr", 
-         "path": "/home/adame/torchAirBender/outputs/policies/TT-AM/lvyr/policy_w1.25.pt", 
+         "path": "/home/adame/torchAirBender/outputs/policies/TT-AM/lvyr/policy_best.pt", 
          "color": (1.0, 0.4, 0.1)},
 
-        # {"cm": "lvyr+g", 
-        #  "path": "/home/adame/torchAirBender/outputs/policies/TT/lvyr+g/policy_final.pt", 
-        #  "color": (0.8, 0.2, 1.0)},
+        {"cm": "lvyr+g", 
+         "path": "/home/adame/torchAirBender/outputs/policies/TT-AM/lvyr+g/policy_final.pt", 
+         "color": (0.8, 0.2, 1.0)},
     ]
     for p in policies:
         p["label"] = p["cm"] + "_" + Path(p["path"]).stem.split("_", 1)[-1]
@@ -326,7 +342,7 @@ def test(cfg: DictConfig):
             R=5.0, 
             r=3.0, 
             d=5.0, 
-            speed=2.0, # Adjust speed as needed for your controller's limits
+            speed=1.5, # Adjust speed as needed for your controller's limits
             dt=cfg.dt
         )
     
@@ -349,8 +365,8 @@ def test(cfg: DictConfig):
         # Reset state
         pos0, vel0, acc0, _ = traj.get_reference(0)
         states = torch.zeros((cfg.num_envs, 13), device=device)
-        # states[:, 0:3]  = pos0.detach()
-        # states[:, 3:6]  = vel0.detach()
+        states[:, 0:3]  = pos0.detach()
+        states[:, 3:6]  = vel0.detach()
         states[:, 6:10] = acc_to_quat(acc0.detach())
 
         if randomize:

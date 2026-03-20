@@ -350,7 +350,7 @@ class BaseRenderer:
         frame     = 0
         paused    = False
         show_axes = True
-        show_ground = True
+        show_ground = False
         fpv_mode    = False
         prev_fpv_mode = False
         saved_cam   = {"pos": (0, 3, 5), "look": (0, 0, 0), "up": (0, 1, 0)}

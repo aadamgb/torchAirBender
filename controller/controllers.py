@@ -79,7 +79,7 @@ class LVYR:
         allocator,
         m, J, g, 
         kv=1.0, kR=1.0, kw=0.25,   # TODO: Hardcoded for now...
-        max_vel=20.0,
+        max_vel=15.0,
         max_yaw_rate=4.0,
         gain_scale = [5.0, 5.0, 2.0]   # Only for gain scheduling TODO: Hardcoded for now...
     ):

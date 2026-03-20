@@ -183,7 +183,7 @@ class BaseRenderer:
         frame       = 0
         paused      = False
         show_axes   = True
-        show_ground = True
+        show_ground = False
 
         print("Space=pause  R=restart  O=toggle axes  G=toggle ground  X/Esc=quit")
 

@@ -1,0 +1,5 @@
+- env=ttpam
+- num_envs=1024
+- steps=1200
+- cm=lvyr+g
+- episodes=50
