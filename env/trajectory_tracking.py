@@ -10,6 +10,7 @@ from utils.randomize import randomize_parameters
 from utils.replay_multi import MultiDroneRenderer
 from utils.trajectory import TrajectoryManager
 from utils.math import acc_to_quat
+from utils.plotter import plot_rollout
 
 from dynamics.quadrotor_dynamics import QuadrotorDynamics
 from controller.controllers import DirectAllocation, SRT, CTBR, LVYR
@@ -266,21 +267,21 @@ def train(cfg: DictConfig):
 def test(cfg: DictConfig):
     # ── Manual configuration ─────────────────────────────────────────────
     policies = [
-        {"cm": "srt",  
-        "path": "/home/adame/torchAirBender/outputs/policies/TT/srt/policy_final.pt",  
-        "color": (0.2, 1.0, 0.4)}, 
+        # {"cm": "srt",  
+        # "path": "/home/adame/torchAirBender/outputs/policies/TT/srt/policy_final.pt",  
+        # "color": (0.2, 1.0, 0.4)}, 
 
         {"cm": "ctbr", 
          "path": "/home/adame/torchAirBender/outputs/policies/TT/ctbr/policy_final.pt", 
          "color": (0.2, 0.6, 1.0)},
 
-        {"cm": "lvyr", 
-         "path": "/home/adame/torchAirBender/outputs/policies/TT/lvyr/policy_final.pt", 
-         "color": (1.0, 0.4, 0.1)},
+        # {"cm": "lvyr", 
+        #  "path": "/home/adame/torchAirBender/outputs/policies/TT/lvyr/policy_final.pt", 
+        #  "color": (1.0, 0.4, 0.1)},
 
-        {"cm": "lvyr+g", 
-         "path": "/home/adame/torchAirBender/outputs/policies/TT/lvyr+g/policy_final.pt", 
-         "color": (0.8, 0.2, 1.0)},
+        # {"cm": "lvyr+g", 
+        #  "path": "/home/adame/torchAirBender/outputs/policies/TT/lvyr+g/policy_final.pt", 
+        #  "color": (0.8, 0.2, 1.0)},
     ]
     for p in policies:
         p["label"] = p["cm"] + "_" + Path(p["path"]).stem.split("_", 1)[-1]
@@ -330,7 +331,8 @@ def test(cfg: DictConfig):
                 J=quadrotor.J,
             )
 
-        traj_data = torch.empty((cfg.steps, 20), device=device)
+        # ── Extended buffer: states(13) | actions(4) | p_ref(3) | v_ref(3) | a_ref(3) = 26 cols
+        traj_data = torch.empty((cfg.steps, 26), device=device)
 
         with torch.no_grad():
             for t in range(cfg.steps):
@@ -349,9 +351,14 @@ def test(cfg: DictConfig):
                 dist    = torch.linalg.norm(pos_ref - states[:, 0:3], dim=-1)
                 too_far = dist > cfg.env.max_dist_to_target
 
-                traj_data[t] = torch.cat(
-                    [states[0].detach(), actions[0].detach(), pos_ref[0].detach()], dim=0
-                )
+                # Store env-0 slice for plotting (26 cols)
+                traj_data[t] = torch.cat([
+                    states[0].detach(),       # 0:13  — full state
+                    actions[0].detach(),      # 13:17 — motor commands
+                    pos_ref[0].detach(),      # 17:20 — p_ref
+                    vel_ref[0].detach(),      # 20:23 — v_ref
+                    acc_ref[0].detach(),      # 23:26 — a_ref
+                ], dim=0)
 
                 states = reset_terminated(states, too_far, pos_ref, vel_ref, acc_ref)
 
@@ -363,6 +370,17 @@ def test(cfg: DictConfig):
             "color": spec.get("color", (0.2, 0.6, 1.0)),
             "label": spec["label"],
         })
+
+        # ── Plot this policy's rollout ────────────────────────────────────
+        plot_rollout(
+            traj_np    = traj_np,
+            dt         = cfg.dt,
+            label      = spec["label"],
+            arm_length = float(params.arm_length[0].cpu()),
+            arm_angle  = float(params.arm_angle[0].cpu()),
+            mass       = float(params.mass[0].cpu()),
+            # save_path = f"outputs/{spec['label']}_plot.png",  # uncomment to save instead of show
+        )
 
     # Render
     last_params = randomize_parameters(cfg.dynamics, 1, device)   # TODO: This is wrong...params should be saved in drones list...

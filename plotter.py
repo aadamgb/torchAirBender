@@ -149,7 +149,7 @@ def draw_motor_diagram(ax, L=0.15, beta_deg=45):
             0.07 * np.sin(np.radians(180 - beta_deg/2)),
             r'$\beta$', color='blue', fontsize=11, ha='right')
 
-    ax.set_title('Motor Layout', fontsize=10, fontweight='bold', pad=6)
+    ax.set_title('Motor Layout', fontsize=12, fontweight='bold', pad=6, loc='left')
 
 
 # ──────────────────────────────────────────────
