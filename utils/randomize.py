@@ -9,15 +9,16 @@ class QuadrotorParams(NamedTuple):
     Per-environment physical parameters.
     Each field is a (num_envs,) tensor, except J and C_D which are (num_envs, 3).
     """
-    mass: Tensor        # (N,)
-    arm_length: Tensor  # (N,)
-    arm_angle: Tensor  # (N,)
-    km: Tensor           # (N, )
-    J: Tensor           # (N, 3)
+    mass: Tensor          # (N,)
+    arm_length: Tensor    # (N,)
+    arm_angle: Tensor     # (N,)
+    km: Tensor            # (N, )
+    J: Tensor             # (N, 3)
     # kf: Tensor          # (N,)
     # km: Tensor          # (N,)
     # motor_tau: Tensor   # (N,)
     # C_D: Tensor         # (N, 3)
+    max_TWR: Tensor       # (N, 3)
 
 
 def randomize_parameters(
@@ -90,22 +91,14 @@ def randomize_parameters(
     km = cfg.km.min * (cfg.km.max / cfg.km.min) ** c
     # motor_tau = cfg.motor_tau.min * (cfg.motor_tau.max / cfg.motor_tau.min) ** c
 
+    max_TWR = torch.full(
+        (num_envs,), cfg.max_TWR, device=device, dtype=dtype  
+    ) # TODO: Not scaling it for now...
+
     # ------------------------------------------------------------------
     # 9. Independent multiplicative noise
     # ------------------------------------------------------------------
-    # def add_noise(x):
-    #     noise = (
-    #         torch.rand_like(x, generator=generator) * 2.0 - 1.0
-    #     ) * cfg.nf
-    #     return x * (1.0 + noise)
-    # def add_noise(x):
-    #     noise = (
-    #         torch.rand(x.shape, device=x.device, dtype=x.dtype, generator=generator) * 2.0 - 1.0
-    #     ) * cfg.nf
-    #     return x * (1.0 + noise)
-    # def add_noise(x):
-    #     return x * (1 + torch.empty(num_envs, device=device)
-    #                 .uniform_(-cfg.nf, cfg.nf))
+
     def add_noise(x):
         noise = torch.empty_like(x).uniform_(-cfg.nf, cfg.nf)
         return x * (1 + noise)
@@ -125,6 +118,7 @@ def randomize_parameters(
     km = add_noise(km)
     # motor_tau = add_noise(motor_tau)
     # C_D = add_noise(C_D)
+    max_TWR = add_noise(max_TWR)
 
     return QuadrotorParams(
         mass=mass,
@@ -135,4 +129,5 @@ def randomize_parameters(
         J=J,
         # motor_tau=motor_tau,
         # C_D=C_D,
+        max_TWR=max_TWR
     )

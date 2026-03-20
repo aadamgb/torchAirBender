@@ -112,17 +112,17 @@ hydra:
     hydra:
     - hydra.mode=MULTIRUN
     task:
-    - env=tt
+    - env=ttpam
     - num_envs=1024
-    - steps=800
-    - cm=srt,ctbr,lvyr.lvyr+g
-    - episodes=20
+    - steps=1200
+    - cm=lvyr
+    - episodes=50
   job:
     name: train
     chdir: null
-    override_dirname: cm=srt,ctbr,lvyr.lvyr+g,env=tt,episodes=20,num_envs=1024,steps=800
-    id: ???
-    num: ???
+    override_dirname: cm=lvyr,env=ttpam,episodes=50,num_envs=1024,steps=1200
+    id: '2'
+    num: 2
     config_name: config
     env_set: {}
     env_copy: []
@@ -148,11 +148,11 @@ hydra:
     - path: ''
       schema: structured
       provider: schema
-    output_dir: ???
+    output_dir: /home/adame/torchAirBender/multirun/2026-03-20/16-36-10/2
     choices:
       renderer: replay
       dynamics: a300
-      env: tt
+      env: ttpam
       hydra/env: default
       hydra/callbacks: null
       hydra/job_logging: default
@@ -163,81 +163,3 @@ hydra:
       hydra/launcher: basic
       hydra/output: default
   verbose: false
-env:
-  name: trajectory_tracking
-  abbr: tt
-  encoder:
-  - 7
-  - 16
-  - 16
-  - 3
-  policy:
-  - 16
-  - 128
-  - 128
-  lr: 0.001
-  loss_weights:
-    pos: 2.0
-    vel: 1.0
-    att: 0.2
-    body_rates: 0.1
-  traj:
-    num_harmonics: 3
-    z_offset: 2.0
-    A: 1.0
-    w: 1.0
-    phi: 2.0
-    dt: 0.01
-  max_dist_to_target: 5.0
-  rmse_threshold: 0.15
-  TWR: 2.0
-  kp_rate: 1.0
-  w_max: 5.0
-dynamics:
-  name: quadrotor
-  sf:
-    nominal: 0.5
-    min: 0.5
-    max: 0.5
-  nf: 0.01
-  arm_length:
-    nominal: 0.15
-    min: 0.149
-    max: 0.151
-  arm_angle:
-    nominal: 45.0
-  mass:
-    nominal: 1.21
-    min: 1.2
-    max: 1.22
-  inertia:
-    xx:
-      nominal: 0.018
-      min: 0.017
-      max: 0.019
-    yy:
-      nominal: 0.018
-      min: 0.017
-      max: 0.019
-    zz:
-      nominal: 0.037
-      min: 0.036
-      max: 0.039
-  km:
-    nominal: 0.012
-    min: 0.011
-    max: 0.013
-  max_rotor_thrust: 20.5
-  min_rotor_thrust: 0.5
-  TWR: 6.9
-renderer:
-  name: replay
-  window_width: 1280
-  window_height: 720
-device: cuda
-dt: 0.01
-cm: ctbr
-num_envs: 1024
-episodes: 20
-steps: 800
-truncation: 50

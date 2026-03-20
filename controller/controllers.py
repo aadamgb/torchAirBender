@@ -15,58 +15,56 @@ class DirectAllocation:
         self.alloc_inv = torch.linalg.pinv(alloc_matrix)
 
 class SRT:
-    def __init__(self, max_thrust=20.0, min_thrust=0.5):
-        self.max_thrust = max_thrust
-        self.min_thrust = min_thrust
+    def __init__(self, mass, max_TWR, min_thrust=0.5):
+        self.mass             = mass
+        self.max_TWR          = max_TWR
+        self.max_total_thrust = (max_TWR * mass * 9.81).unsqueeze(-1)
+        self.max_rotor_thrust = (max_TWR * mass * 9.81 / 4.0).unsqueeze(-1)
+        self.min_thrust       = min_thrust
 
     def __call__(self, state, raw):
-        return raw * (self.max_thrust - self.min_thrust) + self.min_thrust # (N, 4) rotor thrusts
+        return raw * (self.max_rotor_thrust - self.min_thrust) + self.min_thrust  # (N, 4)
 
-    def update_params(self, alloc_matrix=None, J=None, max_thrust=None, min_thrust=None):
-        if alloc_matrix is not None:
-            self.alloc_inv = torch.linalg.pinv(alloc_matrix)
-        if J is not None:
-            self.J = J
-        if max_thrust is not None:
-            self.max_thrust = max_thrust.reshape(-1, 1) if torch.is_tensor(max_thrust) else max_thrust
+    def update_params(self, alloc_matrix=None, J=None, mass=None, max_TWR=None, min_thrust=None):
+        if mass is not None or max_TWR is not None:
+            self.mass             = mass    if mass    is not None else self.mass
+            self.max_TWR          = max_TWR if max_TWR is not None else self.max_TWR
+            self.max_total_thrust = (self.max_TWR * self.mass * 9.81).unsqueeze(-1)
+            self.max_rotor_thrust = (self.max_TWR * self.mass * 9.81 / 4.0).unsqueeze(-1)
         if min_thrust is not None:
-            self.min_thrust = min_thrust.reshape(-1, 1) if torch.is_tensor(min_thrust) else min_thrust
+            self.min_thrust = min_thrust
 
 class CTBR:
-    def __init__(self, allocator, J, max_thrust=20.0, min_thrust=0.5, max_rate=10.0, kp_rate=1.0, dt=0.01):
+    def __init__(self, allocator, J, mass, max_TWR, min_thrust=0.5, max_rate=10.0, kp_rate=1.0, dt=0.01):
         self.allocator  = allocator
-        self.max_thrust = max_thrust * 4.0
+        self.mass       = mass
+        self.max_TWR    = max_TWR
+        self.max_total_thrust = (max_TWR * mass * 9.81).unsqueeze(-1)
         self.min_thrust = min_thrust * 4.0 # TODO: fix this xd 
         self.max_rate   = max_rate
         self.kp_rate    = kp_rate
-        # self.alloc_inv  = torch.linalg.pinv(alloc_matrix)
         self.J          = J
         self.dt         = dt
 
     def __call__(self, state, raw):
         w = state[:, 10:13]
-        Fz    =  raw[:, 0:1] * (self.max_thrust - self.min_thrust) + self.min_thrust
+        Fz    =  raw[:, 0:1] * (self.max_total_thrust - self.min_thrust) + self.min_thrust
         w_des = (raw[:, 1:4] * 2.0 - 1.0) * self.max_rate
         tau = self.J * (self.kp_rate * (w_des - w) / self.dt)  # (N, 3)
         return self.allocator(Fz, tau)
     
-    # def wrench_to_motors(self, Fz, tau):
-    #     """
-    #     Fz    : (N, 1)  physical thrust [N]
-    #     tau   : (N, 3)  physical torques [Nm]
-    #     """
-    #     wrench = torch.cat([Fz, tau], dim=-1)                   # (N, 4)
-    #     return torch.bmm(self.alloc_inv, wrench.unsqueeze(-1)).squeeze(-1)
 
-    def update_params(self, alloc_matrix=None, J=None, max_thrust=None, min_thrust=None):
+    def update_params(self, alloc_matrix=None, mass=None, J=None, max_TWR=None, min_thrust=None):
         if alloc_matrix is not None:
             self.allocator.update_params(alloc_matrix)
         if J is not None:
             self.J = J
-        if max_thrust is not None:
-            self.max_thrust = max_thrust.reshape(-1, 1) if torch.is_tensor(max_thrust) else max_thrust
+        if mass is not None or max_TWR is not None:
+            self.mass    = mass    if mass    is not None else self.mass
+            self.max_TWR = max_TWR if max_TWR is not None else self.max_TWR
+            self.max_total_thrust = (self.max_TWR * self.mass * 9.81).unsqueeze(-1)
         if min_thrust is not None:
-            self.min_thrust = min_thrust.reshape(-1, 1) if torch.is_tensor(min_thrust) else min_thrust
+            self.min_thrust = min_thrust * 4.0  
 
 
 class LVYR:
@@ -80,12 +78,10 @@ class LVYR:
         self,
         allocator,
         m, J, g, 
-        kv=1.0,       # linear velocity P gain
-        kR=1.0,       # attitude P gain (roll/pitch)
-        kw=0.25,
-        max_vel=10.0,
-        max_yaw_rate=1.0,
-        gain_scale = [5.0, 5.0, 2.0]
+        kv=1.0, kR=1.0, kw=0.25,   # TODO: Hardcoded for now...
+        max_vel=20.0,
+        max_yaw_rate=4.0,
+        gain_scale = [5.0, 5.0, 2.0]   # Only for gain scheduling TODO: Hardcoded for now...
     ):
         self.allocator    = allocator   
         self.m            = m
@@ -96,10 +92,9 @@ class LVYR:
         self.kw           = kw
         self.max_vel      = max_vel
         self.max_yaw_rate = max_yaw_rate
-        # self.gain_scale   = gain_scale
         self.gain_scale   = torch.tensor(gain_scale, dtype=torch.float32, device="cuda")  #TODO: Ugly fix...
 
-    def update_params(self, alloc_matrix=None, J=None, kv=None, kR=None, kw=None):
+    def update_params(self, alloc_matrix=None, mass=None, max_TWR=None, J=None, kv=None, kR=None, kw=None):
         if alloc_matrix is not None:
             self.allocator.update_params(alloc_matrix)
         if kv is not None:
@@ -139,11 +134,10 @@ class LVYR:
         yaw_rate_des = (raw[:, 3:4] * 2.0 - 1.0) * self.max_yaw_rate    # (N, 1)
 
         # --- Desired force vector in world frame ---
-        # Proportional velocity error -> desired acceleration
-        a_des = kv * (v_des - vel)               # (N, 3)
-        # Add gravity compensation on z
-        a_des[:, 2] += self.g
-        f_des = self.m * a_des                        # (N, 3) world frame force
+        a_des = kv * (v_des - vel)                                      # (N, 3)
+
+        a_des[:, 2] += self.g                                           # Add gravity compensation on z
+        f_des = self.m * a_des                                          # (N, 3) world frame force
 
         b3_des = F.normalize(f_des, dim=-1, eps=1e-6)
 

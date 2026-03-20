@@ -5,11 +5,11 @@ defaults:
   - _self_
 
 
+cm: ctbr          # Control Mode
+
 
 device: "cuda"
 dt: 0.01
-
-cm: ctbr          # Control Mode
 
 num_envs: 1
 episodes: 20

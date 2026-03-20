@@ -8,7 +8,7 @@ from pathlib import Path
 from utils.nn import MLP
 from utils.randomize import randomize_parameters
 from utils.replay_multi import MultiDroneRenderer
-from utils.trajectory import TrajectoryManager
+from utils.trajectory import TrajectoryManager, HypotrochoidTrajectory
 from utils.math import acc_to_quat
 from utils.plotter import plot_rollout
 
@@ -128,7 +128,8 @@ def train(cfg: DictConfig):
     quadrotor  = QuadrotorDynamics(cfg)
     controller = build_controller(cm, quadrotor, cfg)
     policy    = MLP(layer_sizes=list(cfg.env.policy) + [ACT_DIMS[cm]], 
-                    activation=nn.Tanh,                             # Tanh seems to work better than ReLU, but a bit more unstable sometimes
+                    # activation=nn.Tanh,                             # Tanh seems to work better than ReLU, but a bit more unstable sometimes
+                    activation=nn.ReLU,                             # Tanh seems to work better than ReLU, but a bit more unstable sometimes
                     output_activation=nn.Sigmoid(), 
                     output_bias_init=0.0
                     ).to(device)
@@ -217,25 +218,25 @@ def train(cfg: DictConfig):
     torch.save(policy.state_dict(), os.path.join(out_dir, "policy_final.pt"))
     print(f"\nTotal training time: {time.time() - start:.1f}s")
     
-    traj_np = traj_data.cpu().numpy()
-    plot_rollout(
-        traj_np        = traj_np,
-        dt             = cfg.dt,
-        label          = cfg.cm,
-        arm_length     = float(last_params.arm_length[0].cpu()),
-        arm_angle      = float(last_params.arm_angle[0].cpu()),
-        mass           = float(last_params.mass[0].cpu()),
-        # save_path = f"outputs/{spec['label']}_plot.png",  # uncomment to save instead of show
-    )
-    MultiDroneRenderer(
-        # drones         = traj_env0.cpu().numpy(),
-        trajectory          = traj_np ,
-        ref_trajectory      = traj_np[:, 17:20],
-        arm_length          = float(last_params.arm_length[0].cpu()),
-        arm_angle           = float(last_params.arm_angle[0].cpu()),
-        mass                = float(last_params.mass[0].cpu()),
-        dt                  = cfg.dt,
-    ).run()
+    # traj_np = traj_data.cpu().numpy()
+    # plot_rollout(
+    #     traj_np        = traj_np,
+    #     dt             = cfg.dt,
+    #     label          = cfg.cm,
+    #     arm_length     = float(last_params.arm_length[0].cpu()),
+    #     arm_angle      = float(last_params.arm_angle[0].cpu()),
+    #     mass           = float(last_params.mass[0].cpu()),
+    #     # save_path = f"outputs/{spec['label']}_plot.png",  # uncomment to save instead of show
+    # )
+    # MultiDroneRenderer(
+    #     # drones         = traj_env0.cpu().numpy(),
+    #     trajectory          = traj_np ,
+    #     ref_trajectory      = traj_np[:, 17:20],
+    #     arm_length          = float(last_params.arm_length[0].cpu()),
+    #     arm_angle           = float(last_params.arm_angle[0].cpu()),
+    #     mass                = float(last_params.mass[0].cpu()),
+    #     dt                  = cfg.dt,
+    # ).run()
 
     # # TODO: Add this to a plotter script to analyze info
     # import matplotlib.pyplot as plt
@@ -289,13 +290,13 @@ def test(cfg: DictConfig):
         # "path": "/home/adame/torchAirBender/outputs/policies/TT/srt/policy_final.pt",  
         # "color": (0.2, 1.0, 0.4)}, 
 
-        {"cm": "ctbr", 
-         "path": "/home/adame/torchAirBender/outputs/policies/TT/ctbr/policy_final.pt", 
-         "color": (0.2, 0.6, 1.0)},
+        # {"cm": "ctbr", 
+        #  "path": "/home/adame/torchAirBender/outputs/policies/TT/ctbr/policy_final.pt", 
+        #  "color": (0.2, 0.6, 1.0)},
 
-        # {"cm": "lvyr", 
-        #  "path": "/home/adame/torchAirBender/outputs/policies/TT/lvyr/policy_final.pt", 
-        #  "color": (1.0, 0.4, 0.1)},
+        {"cm": "lvyr", 
+         "path": "/home/adame/torchAirBender/outputs/policies/TT-AM/lvyr/policy_w1.25.pt", 
+         "color": (1.0, 0.4, 0.1)},
 
         # {"cm": "lvyr+g", 
         #  "path": "/home/adame/torchAirBender/outputs/policies/TT/lvyr+g/policy_final.pt", 
@@ -314,10 +315,21 @@ def test(cfg: DictConfig):
 
     quadrotor = QuadrotorDynamics(cfg)
 
-    # Single shared trajectory, fixed by seed
-    traj = TrajectoryManager.from_harmonics(cfg.env.traj, cfg.num_envs, device)
-    traj.randomize()
+    # # Single shared trajectory, fixed by seed
+    # traj = TrajectoryManager.from_harmonics(cfg.env.traj, cfg.num_envs, device)
+    # traj.randomize()
 
+    # NOTE: Temporary Testing Trajectory
+    traj = HypotrochoidTrajectory(
+            num_envs=cfg.num_envs, 
+            device=device, 
+            R=5.0, 
+            r=3.0, 
+            d=5.0, 
+            speed=2.0, # Adjust speed as needed for your controller's limits
+            dt=cfg.dt
+        )
+    
     drones   = []
     ref_traj = None
 
@@ -337,8 +349,8 @@ def test(cfg: DictConfig):
         # Reset state
         pos0, vel0, acc0, _ = traj.get_reference(0)
         states = torch.zeros((cfg.num_envs, 13), device=device)
-        states[:, 0:3]  = pos0.detach()
-        states[:, 3:6]  = vel0.detach()
+        # states[:, 0:3]  = pos0.detach()
+        # states[:, 3:6]  = vel0.detach()
         states[:, 6:10] = acc_to_quat(acc0.detach())
 
         if randomize:

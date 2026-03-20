@@ -180,7 +180,11 @@ class QuadrotorDynamics:
             [cfg.dynamics.km.nominal], device=self.device
         )                                                               # (1,)
 
-        self._alloc_matrix: Tensor | None = None
+        self._alloc_matrix: Tensor | None = None,
+
+        self.max_TWR  = torch.tensor(
+            [cfg.dynamics.max_TWR], device=self.device
+        )
         self._rebuild_alloc_matrix()
 
     # ------------------------------------------------------------------
@@ -239,6 +243,7 @@ class QuadrotorDynamics:
         self.arm_angle  = params.arm_angle * torch.pi / 180
         self.J          = params.J
         self.km         = params.km
+        self.max_TWR    = params.max_TWR
         self._rebuild_alloc_matrix()
 
     def get_parameters(self) -> dict:
@@ -248,6 +253,7 @@ class QuadrotorDynamics:
             'arm_angle':  self.arm_angle,
             'km':         self.km,
             'inertia':    self.J,
+            'max_TWR':    self.max_TWR
         }
     
 
