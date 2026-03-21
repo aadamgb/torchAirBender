@@ -1,5 +1,0 @@
-- env=tt
-- num_envs=1024
-- steps=800
-- cm=ctbr
-- episodes=20

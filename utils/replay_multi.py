@@ -334,7 +334,7 @@ class MultiDroneRenderer(BaseRenderer):
         for d in drones:
             traj        = np.array(d["traj"], dtype=np.float32)
             centers_enu = traj[:, 0:3]
-            actions     = traj[:, 13:17]
+            actions     = traj[:, 22:26]
             centers_ti  = enu_to_ti(centers_enu)
 
             # Body-axis tips

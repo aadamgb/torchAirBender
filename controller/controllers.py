@@ -51,7 +51,8 @@ class CTBR:
         Fz    =  raw[:, 0:1] * (self.max_total_thrust - self.min_thrust) + self.min_thrust
         w_des = (raw[:, 1:4] * 2.0 - 1.0) * self.max_rate
         tau = self.J * (self.kp_rate * (w_des - w) / self.dt)  # (N, 3)
-        return self.allocator(Fz, tau)
+        wrench = torch.cat([Fz, tau], dim=-1)
+        return torch.cat([self.allocator(Fz, tau), wrench], dim=-1)
     
 
     def update_params(self, alloc_matrix=None, mass=None, J=None, max_TWR=None, min_thrust=None):
@@ -79,9 +80,9 @@ class LVYR:
         allocator,
         m, J, g, 
         kv=1.0, kR=1.0, kw=0.25,   # TODO: Hardcoded for now...
-        max_vel=15.0,
+        max_vel=20.0,
         max_yaw_rate=4.0,
-        gain_scale = [5.0, 5.0, 2.0]   # Only for gain scheduling TODO: Hardcoded for now...
+        gain_scale = [1.0, 1.0, 0.25]   # Only for gain scheduling TODO: Hardcoded for now...
     ):
         self.allocator    = allocator   
         self.m            = m
@@ -169,5 +170,11 @@ class LVYR:
         
         Fz = F.softplus(Fz)
         tau    = -kR * eR - kw * eW + gyro        # TODO: Think wether to feedforward term...
+        wrench = torch.cat([Fz, tau], dim=-1)
 
-        return self.allocator(Fz, tau)
+        if gains is not None:
+            out = torch.cat([self.allocator(Fz, tau), wrench, v_des, yaw_rate_des, kv, kR, kw], dim=-1)
+        else:
+            out = torch.cat([self.allocator(Fz, tau), wrench, v_des, yaw_rate_des], dim=-1)
+
+        return out
