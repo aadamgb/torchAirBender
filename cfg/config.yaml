@@ -5,14 +5,14 @@ defaults:
   - _self_
 
 
-cm: ctbr          # Control Mode
+cm: ctbr              # Control Mode
 
 
 device: "cuda"
 dt: 0.01
 
-num_envs: 1
-episodes: 20
+num_envs: 1024
+episodes: 15
 steps: 800
 
 truncation: 50

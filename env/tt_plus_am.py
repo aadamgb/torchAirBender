@@ -1,4 +1,5 @@
 import os
+import csv
 import time
 import torch
 from torch import nn
@@ -8,7 +9,7 @@ from pathlib import Path
 from utils.nn import MLP
 from utils.randomize import randomize_parameters
 from utils.replay_multi import MultiDroneRenderer
-from utils.trajectory import TrajectoryManager, HypotrochoidTrajectory
+from utils.trajectory import TrajectoryManager, HypotrochoidTrajectory, CircularTrajectory
 from utils.math import acc_to_quat
 from utils.plotter import plot_rollout
 
@@ -140,18 +141,16 @@ def train(cfg: DictConfig):
                     ).to(device)
     optimizer = torch.optim.Adam(policy.parameters(), lr=cfg.env.lr)
     traj      = TrajectoryManager.from_harmonics(cfg.env.traj, num_envs, device)
-    # NOTE: Temporary Testing Trajectory
-
-    
 
     best_loss    = float("inf")
 
     traj_data = torch.empty((cfg.steps, CM_COLS[cm]), device=device)
-    speed = 1.0
+    speed = 0.4
 
     for ep in range(cfg.episodes):
         traj.randomize()
-        # traj = HypotrochoidTrajectory(
+
+        # traj = HypotrochoidTrajectory(       # NOTE: Temporary Testing Trajectory
         #     num_envs=cfg.num_envs, 
         #     device=device, 
         #     R=5.0, 
@@ -160,6 +159,15 @@ def train(cfg: DictConfig):
         #     speed=speed, # Adjust speed as needed for your controller's limits
         #     dt=cfg.dt
         # )
+        # traj = CircularTrajectory(
+        #     num_envs = cfg.num_envs,
+        #     device   = device,
+        #     radius   = 3.0,   # metres
+        #     speed    = 1.0,   # m/s
+        #     height   = 1.5,   # metres above origin
+        #     dt       = cfg.dt,
+        # )
+
         states, last_params = reset(cfg, traj, quadrotor, controller)
 
         ep_loss, num_updates  = 0.0, 0
@@ -213,7 +221,7 @@ def train(cfg: DictConfig):
                 loss = window_loss / ((t + 1) - window_start)
                 optimizer.zero_grad()
                 loss.backward()
-                total_norm = torch.nn.utils.clip_grad_norm_(policy.parameters(), max_norm=float('inf'))  # TODO: Think wether clippinng is a good idea or not
+                # total_norm = torch.nn.utils.clip_grad_norm_(policy.parameters(), max_norm=float('inf'))  # TODO: Think wether clippinng is a good idea or not
                 # print(f"Grad norm: {total_norm:.4f}") if (t + 1) == cfg.steps else None
                 optimizer.step()
                 ep_loss     += loss.item()
@@ -229,6 +237,7 @@ def train(cfg: DictConfig):
         if rmse < cfg.env.rmse_threshold:
             print(f"  >> RMSE threshold reached, w: {cfg.env.traj.w:.2f} → {cfg.env.traj.w + cfg.env.w_increase:.2f} 🔥")
             cfg.env.traj.w += cfg.env.w_increase
+            speed += 0.1
 
             if cfg.env.traj.w >= last_saved_w + SAVE_INTERVAL:
                 torch.save(policy.state_dict(), os.path.join(out_dir, f"policy_w{cfg.env.traj.w:.2f}.pt"))
@@ -238,8 +247,11 @@ def train(cfg: DictConfig):
         if avg_loss < best_loss:
             best_loss = avg_loss
             torch.save(policy.state_dict(), os.path.join(out_dir, "policy_best.pt"))
+            # scripted = torch.jit.script(policy.cpu())
+            # scripted.save(os.path.join(out_dir, "policy_best_scripted.pt"))
 
     torch.save(policy.state_dict(), os.path.join(out_dir, "policy_final.pt"))
+    torch.jit.script(policy.cpu()).save(os.path.join(out_dir, "policy_slow_scripted.pt"))
     print(f"\nTotal training time: {time.time() - start:.1f}s")
     
     traj_np = traj_data.cpu().numpy()
@@ -250,57 +262,18 @@ def train(cfg: DictConfig):
         arm_length     = float(last_params.arm_length[0].cpu()),
         arm_angle      = float(last_params.arm_angle[0].cpu()),
         mass           = float(last_params.mass[0].cpu()),
-        save_path = f"/home/adame/torchAirBender/outputs/plots/{cm}_dashboard.png",  # uncomment to save instead of show
+        # save_path = f"/home/adame/torchAirBender/outputs/plots/{cm}_dashboard.png",  # uncomment to save instead of show
     )
-    # MultiDroneRenderer(
-    #     # drones         = traj_env0.cpu().numpy(),
-    #     trajectory          = traj_np ,
-    #     ref_trajectory      = traj_np[:, 13:16],
-    #     arm_length          = float(last_params.arm_length[0].cpu()),
-    #     arm_angle           = float(last_params.arm_angle[0].cpu()),
-    #     mass                = float(last_params.mass[0].cpu()),
-    #     dt                  = cfg.dt,
-    # ).run()
+    MultiDroneRenderer(
+        # drones         = traj_env0.cpu().numpy(),
+        trajectory          = traj_np ,
+        ref_trajectory      = traj_np[:, 13:16],
+        arm_length          = float(last_params.arm_length[0].cpu()),
+        arm_angle           = float(last_params.arm_angle[0].cpu()),
+        mass                = float(last_params.mass[0].cpu()),
+        dt                  = cfg.dt,
+    ).run()
 
-    # # TODO: Add this to a plotter script to analyze info
-    # import matplotlib.pyplot as plt
-    # import numpy as np
-
-    # # convert to cpu numpy
-    # traj_np = traj_env0.cpu().numpy()
-
-    # timee = np.arange(cfg.steps) * dt 
-
-    # # Plot motor commands
-    # plt.figure(figsize=(10, 5))
-    # actions = traj_np[:, 13:17]  # 4 motors
-    # plt.plot(timee, actions[:, 0], label="motor 1")
-    # plt.plot(timee, actions[:, 1], label="motor 2")
-    # plt.plot(timee, actions[:, 2], label="motor 3")
-    # plt.plot(timee, actions[:, 3], label="motor 4")
-    # plt.xlabel("Time [s]")
-    # plt.ylabel("Motor command")
-    # plt.title("Quadrotor Motor Commands Over Rollout")
-    # plt.legend()
-    # plt.grid(True)
-    # plt.show()
-
-    # # Plot control gains
-    # plt.figure(figsize=(10, 5))
-    # actions = traj_np[:, 20:27]  # control commands and gains
-    # plt.plot(timee, actions[:, 0] * 10.0, label="vx")
-    # plt.plot(timee, actions[:, 1] * 10.0, label="vy")
-    # plt.plot(timee, actions[:, 2] * 10.0, label="vz")
-    # plt.plot(timee, actions[:, 3], label="wz")
-    # plt.plot(timee, actions[:, 4] * 5.0, label="kv")
-    # plt.plot(timee, actions[:, 5] * 5.0, label="kR")
-    # plt.plot(timee, actions[:, 6] * 2.0, label="kW")
-    # plt.xlabel("Time [s]")
-    # plt.ylabel("Control value")
-    # plt.title("Quadrotor Actions Over Rollout")
-    # plt.legend()
-    # plt.grid(True)
-    # plt.show()
 
 
 # ==================================================================
@@ -311,20 +284,20 @@ def test(cfg: DictConfig):
     # ── Manual configuration ─────────────────────────────────────────────
     policies = [
         # {"cm": "srt",  
-        # "path": "/home/adame/torchAirBender/outputs/policies/TT-AM/srt/policy_w1.00.pt",  
+        # "path": "/home/adame/torchAirBender/outputs/policies/TT-AM/srt/policy_final.pt",  
         # "color": (0.2, 1.0, 0.4)}, 
 
-        # {"cm": "ctbr", 
-        #  "path": "/home/adame/torchAirBender/outputs/policies/TT-AM/ctbr/policy_w1.50.pt", 
-        #  "color": (0.2, 0.6, 1.0)},
+        {"cm": "ctbr", 
+         "path": "/home/adame/torchAirBender/outputs/policies/TT-AM/ctbr/policy_final.pt", 
+         "color": (0.2, 0.6, 1.0)},
 
         # {"cm": "lvyr", 
-        #  "path": "/home/adame/torchAirBender/outputs/policies/TT-AM/lvyr/policy_best.pt", 
+        #  "path": "/home/adame/torchAirBender/outputs/policies/TT-AM/lvyr/policy_w1.45.pt", 
         #  "color": (1.0, 0.4, 0.1)},
 
-        {"cm": "lvyr+g", 
-         "path": "/home/adame/torchAirBender/outputs/policies/TT-AM/lvyr+g/policy_w1.50.pt", 
-         "color": (0.8, 0.2, 1.0)},
+        # {"cm": "lvyr+g", 
+        #  "path": "/home/adame/torchAirBender/outputs/policies/TT-AM/lvyr+g/policy_w1.60.pt", 
+        #  "color": (0.8, 0.2, 1.0)},
     ]
     for p in policies:
         p["label"] = p["cm"] + "_" + Path(p["path"]).stem.split("_", 1)[-1]
@@ -336,6 +309,7 @@ def test(cfg: DictConfig):
         torch.manual_seed(seed)
 
     device = cfg.device
+    csv_path = "/home/adame/torchAirBender/miscellaneous/trajectories/LOL/hypertrochoid.csv"
 
     quadrotor = QuadrotorDynamics(cfg)
 
@@ -344,18 +318,29 @@ def test(cfg: DictConfig):
     traj.randomize()
 
     # # NOTE: Temporary Testing Trajectory
-    # traj = HypotrochoidTrajectory(
-    #         num_envs=cfg.num_envs, 
-    #         device=device, 
-    #         R=5.0, 
-    #         r=3.0, 
-    #         d=5.0, 
-    #         speed=1.0, # Adjust speed as needed for your controller's limits
-    #         dt=cfg.dt
-    #     )
+    traj = HypotrochoidTrajectory(
+            num_envs=cfg.num_envs, 
+            device=device, 
+            R=5.0, 
+            r=3.0, 
+            d=5.0, 
+            speed=0.4, # Adjust speed as needed for your controller's limits
+            dt=cfg.dt
+        )
+
+    # traj = CircularTrajectory(
+    #     num_envs = cfg.num_envs,
+    #     device   = device,
+    #     radius   = 3.0,   # metres
+    #     speed    = 1.0,   # m/s
+    #     height   = 1.5,   # metres above origin
+    #     dt       = cfg.dt,
+    # )
+
     
     drones   = []
     ref_traj = None
+    save = True
 
     for spec in policies:
         print(f"  Rolling out: {spec['label']}  ({spec['path']})")
@@ -387,12 +372,15 @@ def test(cfg: DictConfig):
             )
         traj_data = torch.empty((cfg.steps, CM_COLS[spec["cm"]]), device=device)
 
+        # states = torch.zeros((cfg.num_envs, 13), device=device)
+        # states[:, 6] = 1.0
+
         with torch.no_grad():
             for t in range(cfg.steps):
                 pos_ref, vel_ref, acc_ref, _ = traj.get_reference(t)
-
                 obs     = get_observation(states, pos_ref, vel_ref, acc_ref)
                 raw     = policy(obs)
+                # raw     = torch.tensor([[0.12, 0.5, 1.5, 0.5]], device=device)
                 if spec["cm"] == "lvyr+g":
                     gains = raw[:, 4:7]   # (N, 3) — kv, kR, kw per env
                     raw   = raw[:, 0:4]   # (N, 4) — the actual control commands
@@ -415,6 +403,16 @@ def test(cfg: DictConfig):
                 states = reset_terminated(states, too_far, pos_ref, vel_ref, acc_ref)
 
         traj_np  = traj_data.cpu().numpy()
+        if ref_traj is None and save == True:
+            os.makedirs(os.path.dirname(csv_path), exist_ok=True)
+            ref_data = traj_np[:, 13:22]  # [px,py,pz,vx,vy,vz,ax,ay,az]
+            with open(csv_path, "w", newline="") as f:
+                writer = csv.writer(f)
+                writer.writerow(["time", "px", "py", "pz", "vx", "vy", "vz", "ax", "ay", "az"])
+                for i, row in enumerate(ref_data):
+                    writer.writerow([i * cfg.dt, *row.tolist()])
+            print(f"  Saved trajectory reference CSV: {csv_path}")
+
         ref_traj = ref_traj if ref_traj is not None else traj_np[:, 13:16]   # 13:16 — p_ref
         
         drones.append({

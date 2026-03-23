@@ -1,14 +1,24 @@
 name: position_control
 abbr: pc
 
-nn: [13, 128, 128, 4]
+policy: [16, 128, 128]
 # nn: [13, 64, 64, 4]
 
 lr: 1e-3
 
-boundary: 3.0   # cubic boundar  (x,y,z=0)
+boundary: 6.0   # cubic boundar  (x,y,z=0)
 
 loss_weights:
   pos: 1.0
   vel: 0.25
-  body_rates: 0.1
+  att: 0.1
+  body_rates: 0.25
+
+
+
+
+# For ctbr
+kp_rate: 1.0
+w_max: 5.0
+
+max_dist_to_target: 50.0

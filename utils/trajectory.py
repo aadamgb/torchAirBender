@@ -2,7 +2,7 @@ import torch
 import torch.nn.functional as F
 from torch import Tensor
 from omegaconf import DictConfig
-
+import math
 
 class TrajectoryManager:
     """
@@ -189,6 +189,46 @@ class HypotrochoidTrajectory:
         acc[:, 1] = ay
 
         # Jumps (not used by most controllers, but kept for interface compatibility)
+        jerk = torch.zeros((self.num_envs, 3), device=self.device)
+
+        return pos, vel, acc, jerk
+    
+
+
+
+class CircularTrajectory:
+    """Simple circular trajectory in the XY plane."""
+    def __init__(self, num_envs, device, radius=2.0, speed=1.0, height=1.5, dt=0.01):
+        self.num_envs = num_envs
+        self.device   = device
+        self.radius   = radius
+        self.speed    = speed      # m/s along the circle
+        self.height   = height     # fixed Z
+        self.dt       = dt
+        self.omega    = speed / radius  # angular velocity (rad/s)
+
+    def get_reference(self, t: int):
+        angle = self.omega * t * self.dt
+
+        # Position
+        px = self.radius * math.cos(angle)
+        py = self.radius * math.sin(angle)
+        pz = self.height
+        pos = torch.tensor([[px, py, pz]], device=self.device).expand(self.num_envs, -1)
+
+        # Velocity (analytical derivative)
+        vx = -self.radius * self.omega * math.sin(angle)
+        vy =  self.radius * self.omega * math.cos(angle)
+        vz = 0.0
+        vel = torch.tensor([[vx, vy, vz]], device=self.device).expand(self.num_envs, -1)
+
+        # Acceleration (analytical second derivative)
+        ax = -self.radius * self.omega**2 * math.cos(angle)
+        ay = -self.radius * self.omega**2 * math.sin(angle)
+        az = 0.0
+        acc = torch.tensor([[ax, ay, az]], device=self.device).expand(self.num_envs, -1)
+
+        # Jerk (zero for constant-speed circle, but keep the 4-tuple interface)
         jerk = torch.zeros((self.num_envs, 3), device=self.device)
 
         return pos, vel, acc, jerk

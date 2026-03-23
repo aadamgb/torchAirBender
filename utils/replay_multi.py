@@ -524,7 +524,7 @@ class PositionControlRenderer(MultiDroneRenderer):
         traj_np = np.array(trajectory, dtype=np.float32)
         super().__init__(
             trajectory     = traj_np,
-            ref_trajectory = traj_np[:, 0:3],   # dummy ref — path not shown
+            ref_trajectory = traj_np[:, 0:3],   
             **kwargs,
         )
 
@@ -563,7 +563,15 @@ class PositionControlRenderer(MultiDroneRenderer):
 
     def _draw_extras(self, scene, frame: int):
         # Draw drones + ref path from parent (ref path is dummy so nothing visible)
-        super()._draw_extras(scene, frame)
+        for d, drone in enumerate(self._drones):
+            color        = drone["color"]
+            thrust_color = self._thrust_colors[d]
+
+            scene.particles(self._drone_body_pos[d],     radius=self._sphere_r, color=(0.2, 0.2, 0.2))
+            scene.lines(    self._drone_arm_verts[d],    width=3.0,             color=(0.85, 0.85, 0.85))
+            scene.particles(self._drone_motor_pos[d],    radius=self._motor_r,  color=color)
+            scene.lines(    self._drone_thrust_verts[d], width=5.0,             color=thrust_color)
+            scene.mesh(     self._drone_arrow_v[d], indices=self._drone_arrow_i[d], color=thrust_color)
 
         # Update and draw target sphere
         idx = min(frame, len(self._target_pos) - 1)

@@ -118,7 +118,8 @@ def randomize_parameters(
     km = add_noise(km)
     # motor_tau = add_noise(motor_tau)
     # C_D = add_noise(C_D)
-    max_TWR = add_noise(max_TWR)
+    # max_TWR = add_noise(max_TWR)
+    max_TWR = max_TWR
 
     return QuadrotorParams(
         mass=mass,
