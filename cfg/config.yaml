@@ -1,12 +1,11 @@
 defaults:
   - env: hover        # Task
   - dynamics: a300    # Quadrotor Model
-  - renderer: replay
   - _self_
 
 
-cm: ctbr              # Control Mode
-
+# Control Mode
+cm: ctbr              
 
 device: "cuda"
 dt: 0.01

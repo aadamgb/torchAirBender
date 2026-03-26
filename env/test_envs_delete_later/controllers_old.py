@@ -223,6 +223,7 @@ class CTBR:
             self.J = J
         if max_thrust is not None:
             self.max_thrust = max_thrust.reshape(-1, 1) if torch.is_tensor(max_thrust) else max_thrust
+            
 # ===========================================================
 # Geometric Controllers
 # ===========================================================
