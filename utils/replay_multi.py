@@ -51,7 +51,7 @@ def build_triangle_at_tip(
 # ---------------------------------------------------------------------------
 
 DRONE_COLORS = [
-    (1.0, 0.3, 0.3),   # red
+    (1.0, 0.0, 0.0),   # red
     (0.2, 1.0, 0.4),   # green
     (0.2, 0.6, 1.0),   # blue
     (1.0, 0.4, 0.1),   # orange
@@ -86,11 +86,11 @@ class BaseRenderer:
 
     def __init__(
         self,
-        arm_length:  float,
-        arm_angle:   float,
-        mass:        float,
-        dt:          float,
         T:           int,
+        arm_length:  float = 0.15,
+        arm_angle:   float = 45.0,
+        mass:        float = 1.2,
+        dt:          float = 0.01,
         window_size: tuple = (1280, 720),
     ):
         self._arm_len    = arm_length
@@ -267,10 +267,10 @@ class MultiDroneRenderer(BaseRenderer):
     def __init__(
         self,
         ref_trajectory: np.ndarray,
-        arm_length:     float,
-        arm_angle:      float,
-        mass:           float,
-        dt:             float,
+        arm_length:     float = 0.15,
+        arm_angle:      float = 45.0,
+        mass:           float = 1.2,
+        dt:             float = 0.01,
         drones:         list = None,
         trajectory:     np.ndarray = None,   # backward-compat single traj
         window_size:    tuple = (1280, 720),

@@ -1,4 +1,5 @@
 import os
+import csv
 import time
 import torch
 from torch import nn
@@ -8,7 +9,7 @@ from pathlib import Path
 from utils.nn import MLP
 from utils.randomize import randomize_parameters
 from utils.replay_multi import MultiDroneRenderer
-from utils.trajectory import TrajectoryManager
+from utils.trajectory import TrajectoryManager, HypotrochoidTrajectory, CircularTrajectory
 from utils.math import acc_to_quat
 from utils.plotter import plot_rollout
 
@@ -21,6 +22,7 @@ ACT_DIMS = {
     "lvyr":   4,
     "lvyr+g": 7,
 }
+CM_COLS = {"srt": 26, "ctbr": 30, "lvyr": 34, "lvyr+g": 37}
 
 def reset(cfg, traj, quadrotor, controller):
     pos0, vel0, acc0, _ = traj.get_reference(0)
@@ -31,7 +33,6 @@ def reset(cfg, traj, quadrotor, controller):
 
     params = randomize_parameters(cfg.dynamics, cfg.num_envs, cfg.device)
     quadrotor.set_parameters(params)
-    # print(quadrotor.get_parameters())
     controller.update_params(
         alloc_matrix = quadrotor._alloc_matrix,
         mass         = quadrotor.m,
@@ -117,31 +118,36 @@ def train(cfg: DictConfig):
     start    = time.time()
     dt, device, num_envs, cm = cfg.dt, cfg.device, cfg.num_envs, cfg.cm
 
-    out_dir  = f"/home/adame/torchAirBender/outputs/policies/TT-AM/{cm}"
-    os.makedirs(out_dir, exist_ok=True)
-
     print(f"\n{'='*85}")
-    print(f" {'-'*16}  Training Trajectory Tracking + Adaptation Module  {'-'*16} ")
+    print(f" {'-'*26}  Training Trajectory Tracking  {'-'*26} ")
     print(f"  Control Mode: {cm}  |  Envs: {num_envs}  |  Episodes: {cfg.episodes}  |  Steps: {cfg.steps}  |  Horizon: {cfg.truncation}")
     print(f"{'='*85}\n")
 
+    out_dir  = f"/home/adame/torchAirBender/outputs/policies/TT/{cm}"
+    os.makedirs(out_dir, exist_ok=True)
+
     quadrotor  = QuadrotorDynamics(cfg)
+    traj      = TrajectoryManager.from_harmonics(cfg.env.traj, num_envs, device)
+
     controller = build_controller(cm, quadrotor, cfg)
+    
     policy    = MLP(layer_sizes=list(cfg.env.policy) + [ACT_DIMS[cm]], 
-                    activation=nn.Tanh,                             # Tanh seems to work better than ReLU, but a bit more unstable sometimes
+                    # activation=nn.Tanh,                           
+                    activation=nn.ReLU,                             
                     output_activation=nn.Sigmoid(), 
                     output_bias_init=0.0
                     ).to(device)
+    
     optimizer = torch.optim.Adam(policy.parameters(), lr=cfg.env.lr)
-    traj      = TrajectoryManager.from_harmonics(cfg.env.traj, num_envs, device)
 
+    traj_data = torch.empty((cfg.steps, CM_COLS[cm]), device=device)
+    last_saved_w = 1.0
+    SAVE_INTERVAL = 0.15
     best_loss    = float("inf")
-
-    # ── Extended buffer: states(13) | actions(4) | p_ref(3) | v_ref(3) | a_ref(3) = 26 cols
-    traj_data = torch.empty((cfg.steps, 26), device=device)
 
     for ep in range(cfg.episodes):
         traj.randomize()
+
         states, last_params = reset(cfg, traj, quadrotor, controller)
 
         ep_loss, num_updates  = 0.0, 0
@@ -161,15 +167,14 @@ def train(cfg: DictConfig):
             obs     = get_observation(states, pos_ref, vel_ref, acc_ref)
             raw     = policy(obs)
             
-            if cm == "lvyr_g":
-                gains = raw[:, 4:7]   # (N, 3) — kv, kR, kw per env
-                raw   = raw[:, 0:4]   # (N, 4) — the actual control commands
+            if cm == "lvyr+g":
+                raw   = raw[:, 0:4]   # (N, 4) — vx, vy, vz, wz
+                gains = raw[:, 4:7]   # (N, 3) — kv, kR, kw 
                 actions = controller(states, raw, gains=gains)
             else:
                 actions = controller(states, raw)
 
-            # Forward pass through the dynamics
-            states  = quadrotor.step(states, actions)
+            states  = quadrotor.step(states, actions[:, 0:4])            # Forward pass through the dynamics
 
             dist    = torch.linalg.norm(pos_ref - states[:, 0:3], dim=-1)
             too_far = dist > cfg.env.max_dist_to_target
@@ -177,18 +182,15 @@ def train(cfg: DictConfig):
             sq_error_sum += (dist ** 2).sum()
             num_samples  += dist.numel()
 
-            window_loss += compute_loss(
-                states, pos_ref, vel_ref, acc_ref,
-                cfg.env.loss_weights, mask=~too_far
-            )
+            window_loss += compute_loss(states, pos_ref, vel_ref, acc_ref, cfg.env.loss_weights, mask=~too_far)
 
             if ep == cfg.episodes - 1:
                 traj_data[t] = torch.cat([
                     states[0].detach(),       # 0:13  — full state
-                    actions[0].detach(),      # 13:17 — motor commands
-                    pos_ref[0].detach(),      # 17:20 — p_ref
-                    vel_ref[0].detach(),      # 20:23 — v_ref
-                    acc_ref[0].detach(),      # 23:26 — a_ref
+                    pos_ref[0].detach(),      # 13:16 — p_ref
+                    vel_ref[0].detach(),      # 16:19 — v_ref
+                    acc_ref[0].detach(),      # 19:23 — a_ref
+                    actions[0].detach(),      # 23:N  — srt + (wrench + lvyr + gains)
                 ], dim=0)
 
             if (t + 1) % cfg.truncation == 0 or (t + 1) == cfg.steps:
@@ -206,76 +208,36 @@ def train(cfg: DictConfig):
         print(f"  Episode {ep+1:>4}/{cfg.episodes}  |  Loss: {avg_loss:.4f}  |  RMSE: {rmse:.3f} m")
 
         if rmse < cfg.env.rmse_threshold:
-            print(f"  >> RMSE threshold reached, w: {cfg.env.traj.w:.2f} → {cfg.env.traj.w + 0.25:.2f} 🔥")
-            torch.save(policy.state_dict(), os.path.join(out_dir, f"policy_w{cfg.env.traj.w:.2f}.pt"))
-            cfg.env.traj.w += 0.25
+            print(f"  >> RMSE threshold reached, w: {cfg.env.traj.w:.2f} → {cfg.env.traj.w + cfg.env.w_increase:.2f} 🔥")
+            cfg.env.traj.w += cfg.env.w_increase
+            speed += 0.1
+
+            if cfg.env.traj.w >= last_saved_w + SAVE_INTERVAL:
+                torch.save(policy.state_dict(), os.path.join(out_dir, f"policy_w{cfg.env.traj.w:.2f}.pt"))
+                last_saved_w = cfg.env.traj.w
+
 
         if avg_loss < best_loss:
             best_loss = avg_loss
             torch.save(policy.state_dict(), os.path.join(out_dir, "policy_best.pt"))
 
     torch.save(policy.state_dict(), os.path.join(out_dir, "policy_final.pt"))
+    torch.jit.script(policy.cpu()).save(os.path.join(out_dir, "policy_slow_scripted.pt"))
     print(f"\nTotal training time: {time.time() - start:.1f}s")
     
     traj_np = traj_data.cpu().numpy()
+    # ---- Plot ------
     plot_rollout(
         traj_np        = traj_np,
         dt             = cfg.dt,
         label          = cfg.cm,
-        arm_length     = float(last_params.arm_length[0].cpu()),
-        arm_angle      = float(last_params.arm_angle[0].cpu()),
-        mass           = float(last_params.mass[0].cpu()),
-        # save_path = f"outputs/{spec['label']}_plot.png",  # uncomment to save instead of show
+        arm_length = float(quadrotor.arm_length[0].cpu()),
+        arm_angle  = float(quadrotor.arm_angle[0].cpu()) * 180 / 3.14,
+        mass       = float(quadrotor.m[0].cpu()),
+        # save_path = f"/home/adame/torchAirBender/outputs/plots/{cm}_dashboard.png",  # uncomment to save instead of show
     )
-    MultiDroneRenderer(
-        # drones         = traj_env0.cpu().numpy(),
-        trajectory          = traj_np ,
-        ref_trajectory      = traj_np[:, 17:20],
-        arm_length          = float(last_params.arm_length[0].cpu()),
-        arm_angle           = float(last_params.arm_angle[0].cpu()),
-        mass                = float(last_params.mass[0].cpu()),
-        dt                  = cfg.dt,
-    ).run()
-
-    # # TODO: Add this to a plotter script to analyze info
-    # import matplotlib.pyplot as plt
-    # import numpy as np
-
-    # # convert to cpu numpy
-    # traj_np = traj_env0.cpu().numpy()
-
-    # timee = np.arange(cfg.steps) * dt 
-
-    # # Plot motor commands
-    # plt.figure(figsize=(10, 5))
-    # actions = traj_np[:, 13:17]  # 4 motors
-    # plt.plot(timee, actions[:, 0], label="motor 1")
-    # plt.plot(timee, actions[:, 1], label="motor 2")
-    # plt.plot(timee, actions[:, 2], label="motor 3")
-    # plt.plot(timee, actions[:, 3], label="motor 4")
-    # plt.xlabel("Time [s]")
-    # plt.ylabel("Motor command")
-    # plt.title("Quadrotor Motor Commands Over Rollout")
-    # plt.legend()
-    # plt.grid(True)
-    # plt.show()
-
-    # # Plot control gains
-    # plt.figure(figsize=(10, 5))
-    # actions = traj_np[:, 20:27]  # control commands and gains
-    # plt.plot(timee, actions[:, 0] * 10.0, label="vx")
-    # plt.plot(timee, actions[:, 1] * 10.0, label="vy")
-    # plt.plot(timee, actions[:, 2] * 10.0, label="vz")
-    # plt.plot(timee, actions[:, 3], label="wz")
-    # plt.plot(timee, actions[:, 4] * 5.0, label="kv")
-    # plt.plot(timee, actions[:, 5] * 5.0, label="kR")
-    # plt.plot(timee, actions[:, 6] * 2.0, label="kW")
-    # plt.xlabel("Time [s]")
-    # plt.ylabel("Control value")
-    # plt.title("Quadrotor Actions Over Rollout")
-    # plt.legend()
-    # plt.grid(True)
-    # plt.show()
+    # ---- Render ------
+    MultiDroneRenderer(trajectory=traj_np, ref_trajectory=traj_np[:, 13:16]).run()
 
 
 # ==================================================================
@@ -283,43 +245,43 @@ def train(cfg: DictConfig):
 # ==================================================================
 
 def test(cfg: DictConfig):
-    # ── Manual configuration ─────────────────────────────────────────────
     policies = [
-        # {"cm": "srt",  
-        # "path": "/home/adame/torchAirBender/outputs/policies/TT/srt/policy_final.pt",  
-        # "color": (0.2, 1.0, 0.4)}, 
+        {"cm": "srt",  
+        "path": "/home/adame/torchAirBender/outputs/policies/TT-AM/srt/policy_final.pt",  
+        "color": (0.2, 1.0, 0.4)}, 
 
         {"cm": "ctbr", 
-         "path": "/home/adame/torchAirBender/outputs/policies/TT/ctbr/policy_final.pt", 
+         "path": "/home/adame/torchAirBender/outputs/policies/TT-AM/ctbr/policy_w1.75.pt", 
          "color": (0.2, 0.6, 1.0)},
 
-        # {"cm": "lvyr", 
-        #  "path": "/home/adame/torchAirBender/outputs/policies/TT/lvyr/policy_final.pt", 
-        #  "color": (1.0, 0.4, 0.1)},
+        {"cm": "lvyr", 
+         "path": "/home/adame/torchAirBender/outputs/policies/TT-AM/lvyr/policy_w1.45.pt", 
+         "color": (1.0, 0.4, 0.1)},
 
-        # {"cm": "lvyr+g", 
-        #  "path": "/home/adame/torchAirBender/outputs/policies/TT/lvyr+g/policy_final.pt", 
-        #  "color": (0.8, 0.2, 1.0)},
+        {"cm": "lvyr+g", 
+         "path": "/home/adame/torchAirBender/outputs/policies/TT-AM/lvyr+g/policy_w1.60.pt", 
+         "color": (0.8, 0.2, 1.0)},
     ]
     for p in policies:
         p["label"] = p["cm"] + "_" + Path(p["path"]).stem.split("_", 1)[-1]
-    randomize = True   # set False for identical dynamics across all policies
+    
+    randomize = True  
     seed      = None
-    # ─────────────────────────────────────────────────────────────────────
-
+  
     if seed is not None:
         torch.manual_seed(seed)
 
     device = cfg.device
+    csv_path = "/home/adame/torchAirBender/miscellaneous/trajectories/LOL/hypertrochoid.csv"
 
     quadrotor = QuadrotorDynamics(cfg)
 
-    # Single shared trajectory, fixed by seed
     traj = TrajectoryManager.from_harmonics(cfg.env.traj, cfg.num_envs, device)
     traj.randomize()
 
-    drones   = []
     ref_traj = None
+    save = True
+    drones   = []
 
     for spec in policies:
         print(f"  Rolling out: {spec['label']}  ({spec['path']})")
@@ -327,7 +289,8 @@ def test(cfg: DictConfig):
         controller = build_controller(spec["cm"], quadrotor, cfg)
         policy = MLP(
             layer_sizes=list(cfg.env.policy) + [ACT_DIMS[spec["cm"]]],
-            activation=nn.Tanh,
+            # activation=nn.Tanh,
+            activation=nn.ReLU,
             output_activation=nn.Sigmoid(),
             output_bias_init=0.0,
         ).to(device)
@@ -348,14 +311,11 @@ def test(cfg: DictConfig):
                 alloc_matrix=quadrotor._alloc_matrix,
                 J=quadrotor.J,
             )
-
-        # ── Extended buffer: states(13) | actions(4) | p_ref(3) | v_ref(3) | a_ref(3) = 26 cols
-        traj_data = torch.empty((cfg.steps, 26), device=device)
+        traj_data = torch.empty((cfg.steps, CM_COLS[spec["cm"]]), device=device)
 
         with torch.no_grad():
             for t in range(cfg.steps):
                 pos_ref, vel_ref, acc_ref, _ = traj.get_reference(t)
-
                 obs     = get_observation(states, pos_ref, vel_ref, acc_ref)
                 raw     = policy(obs)
                 if spec["cm"] == "lvyr+g":
@@ -364,24 +324,33 @@ def test(cfg: DictConfig):
                     actions = controller(states, raw, gains=gains)
                 else:
                     actions = controller(states, raw)
-                states  = quadrotor.step(states, actions)
+                states  = quadrotor.step(states, actions[:, 0:4])
 
                 dist    = torch.linalg.norm(pos_ref - states[:, 0:3], dim=-1)
                 too_far = dist > cfg.env.max_dist_to_target
 
-                # Store env-0 slice for plotting (26 cols)
                 traj_data[t] = torch.cat([
                     states[0].detach(),       # 0:13  — full state
-                    actions[0].detach(),      # 13:17 — motor commands
-                    pos_ref[0].detach(),      # 17:20 — p_ref
-                    vel_ref[0].detach(),      # 20:23 — v_ref
-                    acc_ref[0].detach(),      # 23:26 — a_ref
+                    pos_ref[0].detach(),      # 13:16 — p_ref
+                    vel_ref[0].detach(),      # 16:19 — v_ref
+                    acc_ref[0].detach(),      # 19:23 — a_ref
+                    actions[0].detach(),      # 23:N  — srt + (wrench + lvyr + gains)
                 ], dim=0)
 
                 states = reset_terminated(states, too_far, pos_ref, vel_ref, acc_ref)
 
         traj_np  = traj_data.cpu().numpy()
-        ref_traj = ref_traj if ref_traj is not None else traj_np[:, 17:20]
+        if ref_traj is None and save == True:
+            os.makedirs(os.path.dirname(csv_path), exist_ok=True)
+            ref_data = traj_np[:, 13:22]  # [px,py,pz,vx,vy,vz,ax,ay,az]
+            with open(csv_path, "w", newline="") as f:
+                writer = csv.writer(f)
+                writer.writerow(["time", "px", "py", "pz", "vx", "vy", "vz", "ax", "ay", "az"])
+                for i, row in enumerate(ref_data):
+                    writer.writerow([i * cfg.dt, *row.tolist()])
+            print(f"  Saved trajectory reference CSV: {csv_path}")
+
+        ref_traj = ref_traj if ref_traj is not None else traj_np[:, 13:16]   # 13:16 — p_ref
         
         drones.append({
             "traj":  traj_np,
@@ -389,7 +358,7 @@ def test(cfg: DictConfig):
             "label": spec["label"],
         })
 
-        # ── Plot this policy's rollout ────────────────────────────────────
+        # ---- Plot ------
         plot_rollout(
             traj_np    = traj_np,
             dt         = cfg.dt,
@@ -397,16 +366,8 @@ def test(cfg: DictConfig):
             arm_length = float(params.arm_length[0].cpu()),
             arm_angle  = float(params.arm_angle[0].cpu()),
             mass       = float(params.mass[0].cpu()),
-            # save_path = f"outputs/{spec['label']}_plot.png",  # uncomment to save instead of show
+            save_path = f"/home/adame/torchAirBender/outputs/plots/{spec['label']}_dashboard.png",  # uncomment to save instead of show
         )
 
-    # Render
-    last_params = randomize_parameters(cfg.dynamics, 1, device)   # TODO: This is wrong...params should be saved in drones list...
-    MultiDroneRenderer(
-        drones         = drones,
-        ref_trajectory = ref_traj,
-        arm_length     = float(last_params.arm_length[0].cpu()),
-        arm_angle      = float(last_params.arm_angle[0].cpu()),
-        mass           = float(last_params.mass[0].cpu()),
-        dt             = cfg.dt,
-    ).run()
+    # ---- Render ------
+    MultiDroneRenderer(drones=drones, ref_trajectory=ref_traj).run()

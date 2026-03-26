@@ -27,7 +27,7 @@ traj:
 
 
 max_dist_to_target: 5.0
-rmse_threshold: 0.1
+rmse_threshold: 0.15
 
 w_increase: 0.05
 

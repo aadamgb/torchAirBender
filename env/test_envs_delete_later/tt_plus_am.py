@@ -283,21 +283,21 @@ def train(cfg: DictConfig):
 def test(cfg: DictConfig):
     # ── Manual configuration ─────────────────────────────────────────────
     policies = [
-        # {"cm": "srt",  
-        # "path": "/home/adame/torchAirBender/outputs/policies/TT-AM/srt/policy_final.pt",  
-        # "color": (0.2, 1.0, 0.4)}, 
+        {"cm": "srt",  
+        "path": "/home/adame/torchAirBender/outputs/policies/TT-AM/srt/policy_final.pt",  
+        "color": (0.2, 1.0, 0.4)}, 
 
-        {"cm": "ctbr", 
-         "path": "/home/adame/torchAirBender/outputs/policies/TT-AM/ctbr/policy_final.pt", 
-         "color": (0.2, 0.6, 1.0)},
+        # {"cm": "ctbr", 
+        #  "path": "/home/adame/torchAirBender/outputs/policies/TT-AM/ctbr/policy_w1.75.pt", 
+        #  "color": (0.2, 0.6, 1.0)},
 
-        # {"cm": "lvyr", 
-        #  "path": "/home/adame/torchAirBender/outputs/policies/TT-AM/lvyr/policy_w1.45.pt", 
-        #  "color": (1.0, 0.4, 0.1)},
+        {"cm": "lvyr", 
+         "path": "/home/adame/torchAirBender/outputs/policies/TT-AM/lvyr/policy_w1.45.pt", 
+         "color": (1.0, 0.4, 0.1)},
 
-        # {"cm": "lvyr+g", 
-        #  "path": "/home/adame/torchAirBender/outputs/policies/TT-AM/lvyr+g/policy_w1.60.pt", 
-        #  "color": (0.8, 0.2, 1.0)},
+        {"cm": "lvyr+g", 
+         "path": "/home/adame/torchAirBender/outputs/policies/TT-AM/lvyr+g/policy_w1.60.pt", 
+         "color": (0.8, 0.2, 1.0)},
     ]
     for p in policies:
         p["label"] = p["cm"] + "_" + Path(p["path"]).stem.split("_", 1)[-1]
@@ -317,14 +317,14 @@ def test(cfg: DictConfig):
     traj = TrajectoryManager.from_harmonics(cfg.env.traj, cfg.num_envs, device)
     traj.randomize()
 
-    # # NOTE: Temporary Testing Trajectory
+    # NOTE: Temporary Testing Trajectory
     traj = HypotrochoidTrajectory(
             num_envs=cfg.num_envs, 
             device=device, 
             R=5.0, 
             r=3.0, 
             d=5.0, 
-            speed=0.4, # Adjust speed as needed for your controller's limits
+            speed=1.5, # Adjust speed as needed for your controller's limits
             dt=cfg.dt
         )
 
@@ -429,18 +429,10 @@ def test(cfg: DictConfig):
             arm_length = float(params.arm_length[0].cpu()),
             arm_angle  = float(params.arm_angle[0].cpu()),
             mass       = float(params.mass[0].cpu()),
-            # save_path = f"/home/adame/torchAirBender/outputs/plots/{spec['label']}_dashboard.png",  # uncomment to save instead of show
+            save_path = f"/home/adame/torchAirBender/outputs/plots/{spec['label']}_dashboard.png",  # uncomment to save instead of show
         )
 
     # Render
-    last_params = randomize_parameters(cfg.dynamics, 1, device)   # TODO: This is wrong...params should be saved in drones list...
-    MultiDroneRenderer(
-        drones         = drones,
-        ref_trajectory = ref_traj,
-        arm_length     = float(last_params.arm_length[0].cpu()),
-        arm_angle      = float(last_params.arm_angle[0].cpu()),
-        mass           = float(last_params.mass[0].cpu()),
-        dt             = cfg.dt,
-    ).run()
+    MultiDroneRenderer(drones=drones, ref_trajectory = ref_traj).run()
 
     

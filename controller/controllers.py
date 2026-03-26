@@ -146,7 +146,7 @@ class LVYR:
         heading = torch.stack([torch.cos(yaw), torch.sin(yaw),
                                torch.zeros_like(yaw)], dim=-1)  # (N, 3)
 
-        # b2_des = b3_des x heading, b1_des = b2_des x b3_des
+        ## b2_des = b3_des x heading, b1_des = b2_des x b3_des
         b2_des = F.normalize(torch.linalg.cross(b3_des, heading), dim=-1, eps=1e-6)
         b1_des = torch.linalg.cross(b2_des, b3_des)
 
