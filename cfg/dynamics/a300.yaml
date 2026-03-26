@@ -13,7 +13,7 @@ sf:
   # max: 0.5
 
 # Noise factor applied on top of correlated scaling
-nf: 0.1 #0.1
+nf: 0.15 #0.1
 
 # -----------------------------
 # Structural Params

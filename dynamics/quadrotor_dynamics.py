@@ -161,9 +161,9 @@ class QuadrotorDynamics:
         self.m = torch.tensor(
             [cfg.dynamics.mass.nominal], device=self.device
         )                                                               # (1,)
-        self.arm_length = torch.tensor(
-            [cfg.dynamics.arm_length.nominal], device=self.device
-        )                                                               # (1,)
+        self.arm_length = torch.full(
+            (1, 4), cfg.dynamics.arm_length.nominal, device=self.device
+        )                                                               # (1, 4)
         self.arm_angle = (
             torch.tensor([cfg.dynamics.arm_angle.nominal], device=self.device)
             * torch.pi / 180
@@ -180,12 +180,17 @@ class QuadrotorDynamics:
             [cfg.dynamics.km.nominal], device=self.device
         )                                                               # (1,)
 
-        self._alloc_matrix: Tensor | None = None,
+        self._alloc_matrix: Tensor | None = None
+
+        self.motor_eta = torch.ones((1, 4), device=self.device)
+        
+        self._rebuild_alloc_matrix()
 
         self.max_TWR  = torch.tensor(
             [cfg.dynamics.max_TWR], device=self.device
         )
-        self._rebuild_alloc_matrix()
+
+
 
     # ------------------------------------------------------------------
     # Internal helpers
@@ -197,12 +202,15 @@ class QuadrotorDynamics:
         l  = self.arm_length
         km = self.km
 
-        row0 = torch.ones(len(self.m), 4, device=self.device)
-        row1 = torch.stack([ -l*s,  l*s, l*s, -l*s], dim=-1)
-        row2 = torch.stack([-l*c,  l*c,  -l*c, l*c], dim=-1)
+        N = l.shape[0]
+        row0 = torch.ones(N, 4, device=l.device)
+        row1 = torch.stack([-l[:,0]*s,  l[:,1]*s,  l[:,2]*s, -l[:,3]*s], dim=-1)
+        row2 = torch.stack([-l[:,0]*c,  l[:,1]*c, -l[:,2]*c,  l[:,3]*c], dim=-1)
         row3 = torch.stack([ -km,  -km,   km,  km ], dim=-1)
 
-        self._alloc_matrix = torch.stack([row0, row1, row2, row3], dim=1)  # (N, 4, 4)
+        A = torch.stack([row0, row1, row2, row3], dim=1)   # (N, 4, 4)
+
+        self._alloc_matrix = A * self.motor_eta.unsqueeze(1)  # (N, 4, 4) * (N, 1, 4)
 
     # ------------------------------------------------------------------
     # Public API
@@ -244,6 +252,7 @@ class QuadrotorDynamics:
         self.J          = params.J
         self.km         = params.km
         self.max_TWR    = params.max_TWR
+        self.motor_eta  = params.motor_eta
         self._rebuild_alloc_matrix()
 
     def get_parameters(self) -> dict:

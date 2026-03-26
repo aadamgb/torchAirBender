@@ -33,6 +33,7 @@ def reset(cfg, traj, quadrotor, controller):
 
     params = randomize_parameters(cfg.dynamics, cfg.num_envs, cfg.device)
     quadrotor.set_parameters(params)
+    # print(quadrotor.motor_eta)
     controller.update_params(
         alloc_matrix = quadrotor._alloc_matrix,
         mass         = quadrotor.m,
@@ -132,8 +133,8 @@ def train(cfg: DictConfig):
     controller = build_controller(cm, quadrotor, cfg)
     
     policy    = MLP(layer_sizes=list(cfg.env.policy) + [ACT_DIMS[cm]], 
-                    # activation=nn.Tanh,                           
-                    activation=nn.ReLU,                             
+                    activation=nn.Tanh,                           
+                    # activation=nn.ReLU,                             
                     output_activation=nn.Sigmoid(), 
                     output_bias_init=0.0
                     ).to(device)
@@ -210,7 +211,6 @@ def train(cfg: DictConfig):
         if rmse < cfg.env.rmse_threshold:
             print(f"  >> RMSE threshold reached, w: {cfg.env.traj.w:.2f} → {cfg.env.traj.w + cfg.env.w_increase:.2f} 🔥")
             cfg.env.traj.w += cfg.env.w_increase
-            speed += 0.1
 
             if cfg.env.traj.w >= last_saved_w + SAVE_INTERVAL:
                 torch.save(policy.state_dict(), os.path.join(out_dir, f"policy_w{cfg.env.traj.w:.2f}.pt"))
@@ -231,7 +231,7 @@ def train(cfg: DictConfig):
         traj_np        = traj_np,
         dt             = cfg.dt,
         label          = cfg.cm,
-        arm_length = float(quadrotor.arm_length[0].cpu()),
+        arm_length = float(quadrotor.arm_length[0, 0].cpu()),
         arm_angle  = float(quadrotor.arm_angle[0].cpu()) * 180 / 3.14,
         mass       = float(quadrotor.m[0].cpu()),
         # save_path = f"/home/adame/torchAirBender/outputs/plots/{cm}_dashboard.png",  # uncomment to save instead of show
@@ -247,19 +247,19 @@ def train(cfg: DictConfig):
 def test(cfg: DictConfig):
     policies = [
         {"cm": "srt",  
-        "path": "/home/adame/torchAirBender/outputs/policies/TT-AM/srt/policy_final.pt",  
+        "path": "/home/adame/torchAirBender/outputs/policies/TT/srt/policy_final.pt",  
         "color": (0.2, 1.0, 0.4)}, 
 
         {"cm": "ctbr", 
-         "path": "/home/adame/torchAirBender/outputs/policies/TT-AM/ctbr/policy_w1.75.pt", 
+         "path": "/home/adame/torchAirBender/outputs/policies/TT/ctbr/policy_w1.75.pt", 
          "color": (0.2, 0.6, 1.0)},
 
         {"cm": "lvyr", 
-         "path": "/home/adame/torchAirBender/outputs/policies/TT-AM/lvyr/policy_w1.45.pt", 
+         "path": "/home/adame/torchAirBender/outputs/policies/TT/lvyr/policy_w1.45.pt", 
          "color": (1.0, 0.4, 0.1)},
 
         {"cm": "lvyr+g", 
-         "path": "/home/adame/torchAirBender/outputs/policies/TT-AM/lvyr+g/policy_w1.60.pt", 
+         "path": "/home/adame/torchAirBender/outputs/policies/TT/lvyr+g/policy_w1.60.pt", 
          "color": (0.8, 0.2, 1.0)},
     ]
     for p in policies:
@@ -289,8 +289,8 @@ def test(cfg: DictConfig):
         controller = build_controller(spec["cm"], quadrotor, cfg)
         policy = MLP(
             layer_sizes=list(cfg.env.policy) + [ACT_DIMS[spec["cm"]]],
-            # activation=nn.Tanh,
-            activation=nn.ReLU,
+            activation=nn.Tanh,
+            # activation=nn.ReLU,
             output_activation=nn.Sigmoid(),
             output_bias_init=0.0,
         ).to(device)

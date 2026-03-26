@@ -19,6 +19,7 @@ class QuadrotorParams(NamedTuple):
     # motor_tau: Tensor   # (N,)
     # C_D: Tensor         # (N, 3)
     max_TWR: Tensor       # (N, 3)
+    motor_eta: Tensor     # (N, 4)  — per-motor efficiency in ~[0.8, 1.0]
 
 
 def randomize_parameters(
@@ -48,7 +49,11 @@ def randomize_parameters(
     # 2. Arm length (linear in c)
     # ------------------------------------------------------------------
     l_min, l_max = cfg.arm_length.min, cfg.arm_length.max
-    l = c * (l_max - l_min) + l_min
+    l_mean = c * (l_max - l_min) + l_min                          # (N,) — shared scale
+
+    # Per-arm noise: each arm gets its own multiplicative perturbation
+    arm_noise_l = (torch.rand((num_envs, 4), device=device, dtype=dtype, generator=generator) * 2 - 1) * cfg.nf
+    l = l_mean.unsqueeze(-1) * (1 + arm_noise_l)                   # (N, 4)
 
     alpha = torch.full(
         (num_envs,), cfg.arm_angle.nominal, device=device, dtype=dtype   # THis is in degrees be carful!!!
@@ -59,7 +64,7 @@ def randomize_parameters(
     # ------------------------------------------------------------------
     m_min, m_max = cfg.mass.min, cfg.mass.max
     mass = (
-        (l**3 - l_min**3) / (l_max**3 - l_min**3)
+        (l_mean**3 - l_min**3) / (l_max**3 - l_min**3)
     ) * (m_max - m_min) + m_min
 
     # ------------------------------------------------------------------
@@ -69,7 +74,7 @@ def randomize_parameters(
     Iyy_min, Iyy_max = cfg.inertia.yy.min, cfg.inertia.yy.max
     Izz_min, Izz_max = cfg.inertia.zz.min, cfg.inertia.zz.max
 
-    scale_l5 = (l**5 - l_min**5) / (l_max**5 - l_min**5)
+    scale_l5 = (l_mean**5 - l_min**5) / (l_max**5 - l_min**5)
     Ixx = scale_l5 * (Ixx_max - Ixx_min) + Ixx_min
     Iyy = scale_l5 * (Iyy_max - Iyy_min) + Iyy_min
     Izz = scale_l5 * (Izz_max - Izz_min) + Izz_min
@@ -95,6 +100,9 @@ def randomize_parameters(
         (num_envs,), cfg.max_TWR, device=device, dtype=dtype  
     ) # TODO: Not scaling it for now...
 
+
+    motor_eta = 1.0 - torch.rand((num_envs, 4), device=device, dtype=dtype, generator=generator) * cfg.nf
+
     # ------------------------------------------------------------------
     # 9. Independent multiplicative noise
     # ------------------------------------------------------------------
@@ -111,7 +119,7 @@ def randomize_parameters(
         return J * (1 + noise)
 
     mass = add_noise(mass)
-    l = add_noise(l)    # careful with this one, it can be a bit problematic for srt
+    # l = add_noise(l)    # careful with this one, it can be a bit problematic for srt
     alpha = add_noise(alpha)   
     J = add_noise_diag_vec(J)  
     # kf = add_noise(kf)
@@ -120,6 +128,7 @@ def randomize_parameters(
     # C_D = add_noise(C_D)
     # max_TWR = add_noise(max_TWR)
     max_TWR = max_TWR
+    motor_eta = motor_eta
 
     return QuadrotorParams(
         mass=mass,
@@ -130,5 +139,6 @@ def randomize_parameters(
         J=J,
         # motor_tau=motor_tau,
         # C_D=C_D,
-        max_TWR=max_TWR
+        max_TWR=max_TWR,
+        motor_eta=motor_eta,
     )
