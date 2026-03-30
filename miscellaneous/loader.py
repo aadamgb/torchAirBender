@@ -48,7 +48,7 @@ def load_TOGT(path: str, steps = None, device=None) -> dict:
     return {"pos": pos, "vel": vel, "acc": acc, "dt": dt}
 
 
-def load_LOL(path: str, steps: int, device, dt: float = 0.001) -> dict:
+def load_LOL(path: str, steps = None, device=None, dt: float = 0.001) -> dict:
     """
     Loads a headerless LOL trajectory CSV and returns tensors ready for use in test().
 
@@ -63,6 +63,9 @@ def load_LOL(path: str, steps: int, device, dt: float = 0.001) -> dict:
     native_dt = float(df["t"].iloc[1] - df["t"].iloc[0])
     stride    = max(1, round(dt / native_dt))
     df        = df.iloc[::stride].reset_index(drop=True)
+
+    if steps is None:
+        steps = len(df)
 
     assert len(df) >= steps, f"Trajectory too short after subsampling: {len(df)} rows < {steps} steps"
 

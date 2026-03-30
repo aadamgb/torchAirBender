@@ -7,8 +7,8 @@ name: quadrotor
 # Scale factor — drives correlated parameter sampling across envs
 sf:
   nominal: 0.5
-  min: 0.45
-  max: 0.55
+  min: 0.4
+  max: 0.6
   # min: 0.5
   # max: 0.5
 

@@ -6,11 +6,14 @@ import math
 
 class TrajectoryManager:
     """
-    Unified trajectory interface for both TOGT racing tracks and random harmonics.
+    Unified trajectory interface for loaded tracks (TOGT/LOL) and random harmonics.
 
     Usage:
         # Racing track
         traj = TrajectoryManager.from_togt(path, num_envs, device)
+
+        # LOL trajectory
+        traj = TrajectoryManager.from_lol(path, num_envs, device, dt=0.01)
 
         # Random harmonics
         traj = TrajectoryManager.from_harmonics(cfg, num_envs, device)
@@ -23,7 +26,7 @@ class TrajectoryManager:
     def __init__(self, num_envs: int, device: str):
         self.num_envs = num_envs
         self.device   = device
-        self._mode    = None     # "togt" or "harmonics"
+        self._mode    = None     # "togt", "lol", or "harmonics"
 
     # ── constructors ──────────────────────────────────────────────────────
 
@@ -33,6 +36,22 @@ class TrajectoryManager:
         obj = cls(num_envs, device)
         obj._mode       = "togt"
         obj._trajectory = load_TOGT(path, device=device)
+        obj._length     = obj._trajectory["pos"].shape[0]
+        return obj
+
+    @classmethod
+    def from_lol(
+        cls,
+        path: str,
+        num_envs: int,
+        device: str,
+        steps: int | None = None,
+        dt: float = 0.01,
+    ) -> "TrajectoryManager":
+        from miscellaneous.loader import load_LOL
+        obj = cls(num_envs, device)
+        obj._mode       = "lol"
+        obj._trajectory = load_LOL(path, steps=steps, device=device, dt=dt)
         obj._length     = obj._trajectory["pos"].shape[0]
         return obj
 
@@ -47,7 +66,7 @@ class TrajectoryManager:
     # ── public API ────────────────────────────────────────────────────────
 
     def get_reference(self, t: int, speed_scale: float = 1.0):
-            if self._mode == "togt":
+            if self._mode in ("togt", "lol"):
                 return self._get_togt(t, speed_scale)
             else:
                 return self._get_harmonics(t)        

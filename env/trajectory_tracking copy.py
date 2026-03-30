@@ -124,14 +124,11 @@ def train(cfg: DictConfig):
     print(f"  Control Mode: {cm}  |  Envs: {num_envs}  |  Episodes: {cfg.episodes}  |  Steps: {cfg.steps}  |  Horizon: {cfg.truncation}")
     print(f"{'='*85}\n")
 
-    out_dir  = f"/home/adame/torchAirBender/outputs/policies/DCL/{cm}"
+    out_dir  = f"/home/adame/torchAirBender/outputs/policies/TT/{cm}"
     os.makedirs(out_dir, exist_ok=True)
 
     quadrotor  = QuadrotorDynamics(cfg)
-    # traj      = TrajectoryManager.from_harmonics(cfg.env.traj, num_envs, device)
-
-    path = "/home/adame/torchAirBender/miscellaneous/trajectories/TOGT/togt_a2rl-s2.csv"
-    traj = TrajectoryManager.from_togt(path, cfg.num_envs, cfg.device)
+    traj      = TrajectoryManager.from_harmonics(cfg.env.traj, num_envs, device)
 
     controller = build_controller(cm, quadrotor, cfg)
     
@@ -142,18 +139,15 @@ def train(cfg: DictConfig):
                     output_bias_init=0.0
                     ).to(device)
     
-    policy.load_state_dict(torch.load("/home/adame/torchAirBender/outputs/policies/DCL/ctbr/dcl_07.pt", map_location=device))
-    
     optimizer = torch.optim.Adam(policy.parameters(), lr=cfg.env.lr)
 
     traj_data = torch.empty((cfg.steps, CM_COLS[cm]), device=device)
     last_saved_w = 1.0
-    SAVE_INTERVAL = 0.05
+    SAVE_INTERVAL = 0.15
     best_loss    = float("inf")
-    s = 0.5
 
     for ep in range(cfg.episodes):
-        # traj.randomize()
+        traj.randomize()
 
         states, last_params = reset(cfg, traj, quadrotor, controller)
 
@@ -169,7 +163,7 @@ def train(cfg: DictConfig):
                 window_start = t
                 window_loss  = torch.zeros(1, device=device)
 
-            pos_ref, vel_ref, acc_ref, _ = traj.get_reference(t, speed_scale=s)
+            pos_ref, vel_ref, acc_ref, _ = traj.get_reference(t)
 
             obs     = get_observation(states, pos_ref, vel_ref, acc_ref)
             raw     = policy(obs)
@@ -215,12 +209,11 @@ def train(cfg: DictConfig):
         print(f"  Episode {ep+1:>4}/{cfg.episodes}  |  Loss: {avg_loss:.4f}  |  RMSE: {rmse:.3f} m")
 
         if rmse < cfg.env.rmse_threshold:
-            print(f"  >> RMSE threshold reached, s: {s:.2f} → {s + cfg.env.w_increase:.2f} 🔥")
-            # cfg.env.traj.w += cfg.env.w_increase
-            s += cfg.env.w_increase
+            print(f"  >> RMSE threshold reached, w: {cfg.env.traj.w:.2f} → {cfg.env.traj.w + cfg.env.w_increase:.2f} 🔥")
+            cfg.env.traj.w += cfg.env.w_increase
 
             if cfg.env.traj.w >= last_saved_w + SAVE_INTERVAL:
-                torch.save(policy.state_dict(), os.path.join(out_dir, f"race_s_{s:.2f}.pt"))
+                torch.save(policy.state_dict(), os.path.join(out_dir, f"policy_w{cfg.env.traj.w:.2f}.pt"))
                 last_saved_w = cfg.env.traj.w
 
 
@@ -258,7 +251,7 @@ def test(cfg: DictConfig):
         # "color": (0.2, 1.0, 0.4)}, 
 
         {"cm": "ctbr", 
-         "path": "/home/adame/torchAirBender/outputs/policies/DCL/ctbr/policy_final.pt", 
+         "path": "/home/adame/torchAirBender/outputs/policies/TT/ctbr/policy_final.pt", 
          "color": (0.2, 0.6, 1.0)},
 
         # {"cm": "lvyr", 
@@ -286,7 +279,7 @@ def test(cfg: DictConfig):
     quadrotor = QuadrotorDynamics(cfg)
 
     # traj = TrajectoryManager.from_harmonics(cfg.env.traj, cfg.num_envs, device)
-    # traj = HypotrochoidTrajectory(num_envs=1, device=device, speed=1.5)
+    traj = HypotrochoidTrajectory(num_envs=1, device=device, speed=1.5)
 
     # path = "/home/adame/torchAirBender/miscellaneous/trajectories/LOL/random.csv"
     # traj = TrajectoryManager.from_lol(path, cfg.num_envs, cfg.device, cfg.steps)
@@ -330,7 +323,7 @@ def test(cfg: DictConfig):
 
         with torch.no_grad():
             for t in range(cfg.steps):
-                pos_ref, vel_ref, acc_ref, _ = traj.get_reference(t, 0.4)
+                pos_ref, vel_ref, acc_ref, _ = traj.get_reference(t)
                 obs     = get_observation(states, pos_ref, vel_ref, acc_ref)
                 raw     = policy(obs)
                 if spec["cm"] == "lvyr+g":
