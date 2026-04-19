@@ -137,8 +137,8 @@ def integrate_euler(
     p: Tensor, v: Tensor, q: Tensor, w: Tensor,
     p_dot: Tensor, v_dot: Tensor, q_dot: Tensor, w_dot: Tensor,
 ) -> tuple[Tensor, Tensor, Tensor, Tensor]:
-    p_next = p + p_dot * dt
     v_next = v + v_dot * dt
+    p_next = p + v_next * dt
     q_next = F.normalize(q + q_dot * dt, dim=-1)               # renormalize quaternion
     w_next = w + w_dot * dt
     return p_next, v_next, q_next, w_next

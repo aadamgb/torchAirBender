@@ -79,10 +79,10 @@ class LVYR:
         self,
         allocator,
         m, J, g, 
-        kv=1.0, kR=1.0, kw=0.25,   # TODO: Hardcoded for now...
-        max_vel=20.0,
-        max_yaw_rate=4.0,
-        gain_scale = [3.0, 3.0, 0.25]   # Only for gain scheduling TODO: Hardcoded for now...
+        kv=1.0, kR=2.0, kw=0.15,   # TODO: Hardcoded for now...
+        max_vel=5.0,
+        max_yaw_rate=2.0,
+        gain_scale = [1.0, 1.0, 0.15]   # Only for gain scheduling TODO: Hardcoded for now...
     ):
         self.allocator    = allocator   
         self.m            = m

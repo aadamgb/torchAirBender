@@ -58,9 +58,49 @@ def load_LOL(path: str, steps = None, device=None, dt: float = 0.001) -> dict:
         dt : desired timestep. If larger than the native dt, rows are subsampled.
              e.g. native dt=0.001, pass dt=0.01 → every 10th row is kept.
     """
-    df = pd.read_csv(path, header=None, names=["t", "x", "y", "z", "vx", "vy", "vz", "ax", "ay", "az"])
+    canonical_cols = ["t", "x", "y", "z", "vx", "vy", "vz", "ax", "ay", "az"]
+    aliases = {
+        "t":  ["t", "time"],
+        "x":  ["x", "px", "p_x"],
+        "y":  ["y", "py", "p_y"],
+        "z":  ["z", "pz", "p_z"],
+        "vx": ["vx", "v_x"],
+        "vy": ["vy", "v_y"],
+        "vz": ["vz", "v_z"],
+        "ax": ["ax", "a_x", "a_lin_x"],
+        "ay": ["ay", "a_y", "a_lin_y"],
+        "az": ["az", "a_z", "a_lin_z"],
+    }
 
-    native_dt = float(df["t"].iloc[1] - df["t"].iloc[0])
+    # First try header-aware parsing (supports: time,px,py,pz,...).
+    df_header = pd.read_csv(path)
+    lower_to_original = {str(c).strip().lower(): c for c in df_header.columns}
+    rename_map = {}
+    for canonical, keys in aliases.items():
+        for key in keys:
+            if key in lower_to_original:
+                rename_map[lower_to_original[key]] = canonical
+                break
+
+    if len(rename_map) == len(canonical_cols):
+        df = df_header.rename(columns=rename_map)[canonical_cols]
+    else:
+        # Fallback for legacy headerless format.
+        df = pd.read_csv(path, header=None, names=canonical_cols)
+
+    # Force numeric types; invalid rows (e.g., accidental partial lines) are dropped.
+    for col in canonical_cols:
+        df[col] = pd.to_numeric(df[col], errors="coerce")
+    df = df.dropna(subset=canonical_cols).reset_index(drop=True)
+
+    if len(df) < 2:
+        raise ValueError(f"Trajectory CSV must contain at least 2 valid numeric rows: {path}")
+
+    dts = np.diff(df["t"].to_numpy(dtype=np.float64))
+    positive_dts = dts[dts > 0]
+    if len(positive_dts) == 0:
+        raise ValueError(f"Trajectory CSV has non-increasing time values: {path}")
+    native_dt = float(np.median(positive_dts))
     stride    = max(1, round(dt / native_dt))
     df        = df.iloc[::stride].reset_index(drop=True)
 

@@ -162,55 +162,50 @@ class HypotrochoidTrajectory:
         self.R = R
         self.r = r
         self.d = d
-        self.speed = speed # Controls how fast the drone moves along the path
+        self.speed = speed 
         self.dt = dt
-        
-        # Precompute the constant term
         self.k = (R - r) / r
+        
+        # New: Track the cumulative phase (angle) for each environment
+        self.phase = torch.zeros((num_envs,), device=device)
+        # Track total rotation to detect cycle completion
+        self.total_rotation = torch.zeros((num_envs,), device=device)
 
     def get_reference(self, t_step):
-        # Convert time step to theta (angle)
-        theta = t_step * self.dt * self.speed
+        # 1. Update phase incrementally: delta_theta = dt * speed
+        # This ensures continuity even if self.speed changes mid-flight
+        d_theta = self.dt * self.speed
+        self.phase += d_theta
+        self.total_rotation += d_theta
         
-        # Position (x, y) - z is fixed at a height (e.g., 2.0)
-        # Using the formulas from the image
-        x = (self.R - self.r) * torch.cos(torch.tensor(theta)) + \
-            self.d * torch.cos(torch.tensor(self.k * theta))
-        y = (self.R - self.r) * torch.sin(torch.tensor(theta)) - \
-            self.d * torch.sin(torch.tensor(self.k * theta))
+        theta = self.phase
+        
+        # Position calculations (x, y)
+        x = (self.R - self.r) * torch.cos(theta) + self.d * torch.cos(self.k * theta)
+        y = (self.R - self.r) * torch.sin(theta) - self.d * torch.sin(self.k * theta)
         
         pos = torch.zeros((self.num_envs, 3), device=self.device)
         pos[:, 0] = x
         pos[:, 1] = y
-        pos[:, 2] = 2.0 # Fixed flight altitude
+        pos[:, 2] = 2.0 
 
-        # Velocity (First derivative w.r.t time)
-        # dx/dt = dtheta/dt * [- (R-r) sin(theta) - d * k * sin(k*theta)]
-        vel_scale = self.speed
-        vx = -((self.R - self.r) * torch.sin(torch.tensor(theta)) + \
-               self.d * self.k * torch.sin(torch.tensor(self.k * theta))) * vel_scale
-        vy = ((self.R - self.r) * torch.cos(torch.tensor(theta)) - \
-              self.d * self.k * torch.cos(torch.tensor(self.k * theta))) * vel_scale
+        # Velocity and Acceleration scaling
+        # Note: derivatives are w.r.t time, so we multiply by speed and speed^2
+        vx = -((self.R - self.r) * torch.sin(theta) + self.d * self.k * torch.sin(self.k * theta)) * self.speed
+        vy = ((self.R - self.r) * torch.cos(theta) - self.d * self.k * torch.cos(self.k * theta)) * self.speed
         
         vel = torch.zeros((self.num_envs, 3), device=self.device)
         vel[:, 0] = vx
         vel[:, 1] = vy
 
-        # Acceleration (Second derivative w.r.t time)
-        acc_scale = self.speed**2
-        ax = -((self.R - self.r) * torch.cos(torch.tensor(theta)) + \
-               self.d * (self.k**2) * torch.cos(torch.tensor(self.k * theta))) * acc_scale
-        ay = -((self.R - self.r) * torch.sin(torch.tensor(theta)) - \
-               self.d * (self.k**2) * torch.sin(torch.tensor(self.k * theta))) * acc_scale
+        ax = -((self.R - self.r) * torch.cos(theta) + self.d * (self.k**2) * torch.cos(self.k * theta)) * (self.speed**2)
+        ay = -((self.R - self.r) * torch.sin(theta) - self.d * (self.k**2) * torch.sin(self.k * theta)) * (self.speed**2)
         
         acc = torch.zeros((self.num_envs, 3), device=self.device)
         acc[:, 0] = ax
         acc[:, 1] = ay
 
-        # Jumps (not used by most controllers, but kept for interface compatibility)
-        jerk = torch.zeros((self.num_envs, 3), device=self.device)
-
-        return pos, vel, acc, jerk
+        return pos, vel, acc, torch.zeros((self.num_envs, 3), device=self.device)
     
 
 

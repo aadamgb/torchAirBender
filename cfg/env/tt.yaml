@@ -11,22 +11,22 @@ loss_weights:
   pos: 2.0
   vel: 1.0
   att: 0.2
-  body_rates: 0.1
+  body_rates: 0.2
 
 
 traj:
   num_harmonics: 3  # must be integer
-  z_offset: 2.0
+  z_offset: 0.0
   A: 2.0
   w: 1.0
   phi: 2.0
   dt: 0.01
 
 max_dist_to_target: 5.0
-rmse_threshold: 0.1
+rmse_threshold: 0.15
 
 
-w_increase: 0.0
+w_increase: 0.1
 
 # # For the CTBR controller
 kp_rate: 1.0

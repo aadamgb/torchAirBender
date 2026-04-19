@@ -7,13 +7,13 @@ name: quadrotor
 # Scale factor — drives correlated parameter sampling across envs
 sf:
   nominal: 0.5
-  min: 0.4
-  max: 0.6
+  min: 0.0
+  max: 1.0
   # min: 0.5
   # max: 0.5
 
 # Noise factor applied on top of correlated scaling
-nf: 0.15 #0.1
+nf: 0.2 #0.1
 
 # -----------------------------
 # Structural Params
@@ -32,23 +32,23 @@ arm_angle:
 # Mass [kg]
 mass:
   nominal: 1.21
-  min: 0.5
-  max: 2.5
+  min: 0.8
+  max: 1.8
 
 # Inertia [kg·m^2] — diagonal elements [Ixx, Iyy, Izz]
 inertia:
   xx:
-    nominal: 0.018
-    min: 0.009
-    max: 0.04
+    nominal: 0.007
+    min: 0.0009
+    max: 0.014
   yy:
-    nominal: 0.018
-    min: 0.009
-    max: 0.04
+    nominal: 0.007
+    min: 0.0009
+    max: 0.014
   zz:
-    nominal: 0.037
-    min: 0.015
-    max: 0.06
+    nominal: 0.013
+    min: 0.009
+    max: 0.017
 
 
 # -----------------------------

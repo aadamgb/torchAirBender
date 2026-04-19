@@ -16,9 +16,6 @@ from utils.plotter import plot_rollout
 from dynamics.quadrotor_dynamics import QuadrotorDynamics
 from controller.controllers import DirectAllocation, SRT, CTBR, LVYR
 
-
-
-
 ACT_DIMS = {
     "srt":    4,
     "ctbr":   4,
@@ -127,34 +124,33 @@ def train(cfg: DictConfig):
     print(f"  Control Mode: {cm}  |  Envs: {num_envs}  |  Episodes: {cfg.episodes}  |  Steps: {cfg.steps}  |  Horizon: {cfg.truncation}")
     print(f"{'='*85}\n")
 
-    out_dir  = f"/home/adame/torchAirBender/outputs/policies/CAMP/harmonics/{cm}"
+    out_dir  = f"/home/adame/torchAirBender/outputs/policies/CAMP/uzh/{cm}"
     os.makedirs(out_dir, exist_ok=True)
 
     quadrotor  = QuadrotorDynamics(cfg)
     traj      = TrajectoryManager.from_harmonics(cfg.env.traj, num_envs, device)
 
-    # path = "/home/adame/torchAirBender/miscellaneous/trajectories/TOGT/togt_traj.csv"
-    # traj = TrajectoryManager.from_togt(path, cfg.num_envs, cfg.device)
+    path = "/home/adame/torchAirBender/miscellaneous/trajectories/TOGT/togt_traj.csv"
+    traj = TrajectoryManager.from_togt(path, cfg.num_envs, cfg.device)
 
     controller = build_controller(cm, quadrotor, cfg)
     
     policy    = MLP(layer_sizes=list(cfg.env.policy) + [ACT_DIMS[cm]], 
-                    # activation=nn.Tanh,                           
-                    activation=nn.ReLU,                             
+                    activation=nn.Tanh,                           
+                    # activation=nn.ReLU,                             
                     output_activation=nn.Sigmoid(), 
                     output_bias_init=0.0
                     ).to(device)
     
-    # ⚠️Load policy⚠️
-    # policy.load_state_dict(torch.load("/home/adame/torchAirBender/outputs/policies/CAMP/uzh/ctbr/uzh_starter.pt", map_location=device))
+    policy.load_state_dict(torch.load("/home/adame/torchAirBender/outputs/policies/CAMP/uzh/ctbr/uzh_starter.pt", map_location=device))
     
     optimizer = torch.optim.Adam(policy.parameters(), lr=cfg.env.lr)
 
     traj_data = torch.empty((cfg.steps, CM_COLS[cm]), device=device)
     last_saved_w = 1.0
-    SAVE_INTERVAL = 0.1
+    SAVE_INTERVAL = 0.25
     best_loss    = float("inf")
-    s = 0.3
+    s = 0.5
 
     for ep in range(cfg.episodes):
         traj.randomize()
@@ -173,13 +169,15 @@ def train(cfg: DictConfig):
                 window_start = t
                 window_loss  = torch.zeros(1, device=device)
 
-            pos_ref, vel_ref, acc_ref, _ = traj.get_reference(t, speed_scale=s)
+            pos_ref, vel_ref, acc_ref, _ = traj.get_reference(t)
 
             obs     = get_observation(states, pos_ref, vel_ref, acc_ref)
             raw     = policy(obs)
-
+            
             if cm == "lvyr+g":
-                actions = controller(states, raw[:, 0:4], gains=raw[:, 4:7])
+                raw   = raw[:, 0:4]   # (N, 4) — vx, vy, vz, wz
+                gains = raw[:, 4:7]   # (N, 3) — kv, kR, kw 
+                actions = controller(states, raw, gains=gains)
             else:
                 actions = controller(states, raw)
 
@@ -217,13 +215,11 @@ def train(cfg: DictConfig):
         print(f"  Episode {ep+1:>4}/{cfg.episodes}  |  Loss: {avg_loss:.4f}  |  RMSE: {rmse:.3f} m")
 
         if rmse < cfg.env.rmse_threshold:
-            print(f"  >> RMSE threshold reached, s: {cfg.env.traj.w:.2f} → {cfg.env.traj.w + cfg.env.w_increase:.2f} 🔥")
-            # print(f"  >> RMSE threshold reached, s: {s:.2f} → {s + cfg.env.w_increase:.2f} 🔥")
+            print(f"  >> RMSE threshold reached, w: {cfg.env.traj.w:.2f} → {cfg.env.traj.w + cfg.env.w_increase:.2f} 🔥")
             cfg.env.traj.w += cfg.env.w_increase
-            # s += cfg.env.w_increase
 
             if cfg.env.traj.w >= last_saved_w + SAVE_INTERVAL:
-                torch.save(policy.state_dict(), os.path.join(out_dir, f"policy_{cfg.env.traj.w:.2f}.pt"))
+                torch.save(policy.state_dict(), os.path.join(out_dir, f"uzh_{cfg.env.traj.w:.2f}.pt"))
                 last_saved_w = cfg.env.traj.w
 
 
@@ -265,7 +261,7 @@ def test(cfg: DictConfig):
         #  "color": (0.2, 0.6, 1.0)},
 
         {"cm": "ctbr", 
-         "path": "/home/adame/torchAirBender/outputs/policies/CAMP/uzh/ctbr/uzh_starter.pt", 
+         "path": "/home/adame/torchAirBender/outputs/policies/CAMP/uzh/ctbr/policy_final.pt", 
          "color": (0.2, 0.6, 1.0)},
 
         # {"cm": "lvyr", 
@@ -287,7 +283,7 @@ def test(cfg: DictConfig):
 
     device = cfg.device
     # csv_path = "/home/adame/torchAirBender/miscellaneous/trajectories/CAMP/harmonic.csv"
-    csv_path = "/home/adame/torchAirBender/miscellaneous/trajectories/CAMP/harmonic.csv"
+    csv_path = "/home/adame/torchAirBender/miscellaneous/trajectories/CAMP/uzh.csv"
     save = True
     # save = False
 
@@ -298,8 +294,8 @@ def test(cfg: DictConfig):
 
     # path = "/home/adame/torchAirBender/miscellaneous/trajectories/CAMP/harmonic.csv"
     # traj = TrajectoryManager.from_lol(path, cfg.num_envs, cfg.device, cfg.steps)
-    # path = "/home/adame/torchAirBender/miscellaneous/trajectories/TOGT/togt_traj.csv"
-    # traj = TrajectoryManager.from_togt(path, cfg.num_envs, cfg.device)
+    path = "/home/adame/torchAirBender/miscellaneous/trajectories/TOGT/togt_traj.csv"
+    traj = TrajectoryManager.from_togt(path, cfg.num_envs, cfg.device)
     
     # traj.randomize()
 
@@ -343,8 +339,7 @@ def test(cfg: DictConfig):
                 # if t % 500 == 0:
                 #     traj.speed += 0.25  # Increase speed by 0.2 m/s (or rad/s equivalent)
                 #     print(f"New Speed: {traj.speed:.2f}")
-                # pos_ref, vel_ref, acc_ref, _ = traj.get_reference(t, 0.5)
-                pos_ref, vel_ref, acc_ref, _ = traj.get_reference(t)
+                pos_ref, vel_ref, acc_ref, _ = traj.get_reference(t, 0.6)
                 obs     = get_observation(states, pos_ref, vel_ref, acc_ref)
                 raw     = policy(obs)
                 if spec["cm"] == "lvyr+g":
