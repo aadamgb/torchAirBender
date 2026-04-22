@@ -1,0 +1,4 @@
+name: body_rates
+
+kp_rate: 1.0
+w_max: 5.0

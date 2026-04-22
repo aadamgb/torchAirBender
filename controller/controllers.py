@@ -48,8 +48,10 @@ class CTBR:
 
     def __call__(self, state, raw):
         w = state[:, 10:13]
-        Fz    =  raw[:, 0:1] * (self.max_total_thrust - self.min_thrust) + self.min_thrust
-        w_des = (raw[:, 1:4] * 2.0 - 1.0) * self.max_rate
+        # Fz    =  raw[:, 0:1] * (self.max_total_thrust - self.min_thrust) + self.min_thrust
+        Fz    =  raw[:, 0:1] # SUPERCARFEWUL WIH THIS; PUT IT BACk ❌⚠️❌💥❌⚠️
+        # w_des = (raw[:, 1:4] * 2.0 - 1.0) * self.max_rate
+        w_des = raw[:, 1:4] # SUPERCARFEWUL WIH THIS; PUT IT BACk ❌⚠️❌💥❌⚠️
         tau = self.J * (self.kp_rate * (w_des - w) / self.dt)  # (N, 3)
         wrench = torch.cat([Fz, tau], dim=-1)
         return torch.cat([self.allocator(Fz, tau), wrench], dim=-1)

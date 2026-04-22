@@ -88,10 +88,10 @@ class BaseRenderer:
     def __init__(
         self,
         trajectory:  np.ndarray,  # (T, 13) ENU: pos[0:3] vel[3:6] quat_wxyz[6:10] omega[10:13]
-        arm_length:  float,
-        arm_angle:   float,
-        mass:        float,
-        dt:          float,
+        arm_length:     float = 0.15,
+        arm_angle:      float = 45.0,
+        mass:           float = 1.2,
+        dt:             float = 0.01,
         window_size: tuple = (1280, 720),
     ):
         self._traj       = np.array(trajectory, dtype=np.float32)
