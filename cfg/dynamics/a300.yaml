@@ -7,13 +7,13 @@ name: quadrotor
 # Scale factor — drives correlated parameter sampling across envs
 sf:
   nominal: 0.5
-  min: 0.0
-  max: 1.0
-  # min: 0.5
-  # max: 0.5
+  # min: 0.0
+  # max: 1.0
+  min: 0.5
+  max: 0.5
 
 # Noise factor applied on top of correlated scaling
-nf: 0.2 #0.1
+nf: 0.0 #0.1
 
 # -----------------------------
 # Structural Params
@@ -59,6 +59,17 @@ km:
   nominal: 0.012
   min: 0.008
   max: 0.02
+
+# T [N] = a0 * rpm^2
+a0:
+  nominal: 0.000000045
+  min: 0.000000044
+  max: 0.000000046
+
+motor_tau:
+  nominal: 0.05
+  min: 0.045
+  max: 0.055
 
 # max_rotor_thrust: 20.5    # [N]
 # min_rotor_thrust: 0.5     # [N]

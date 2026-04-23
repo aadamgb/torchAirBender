@@ -3,7 +3,7 @@ import torch.nn as nn
 from torch import Tensor
 from omegaconf import DictConfig
 from utils.randomize import QuadrotorParams
-from utils.math import *
+from utils.math import quat_to_rotmat, quat_derivative
 
 
 #=====================================================
@@ -24,13 +24,6 @@ from utils.math import *
 """
 #=====================================================
 
-
-# ===========================================================
-# JIT-compiled pure functions — these are the hottest paths.
-# torch.jit.script works perfectly on stateless functions
-# that only use tensor ops and have no Python-class baggage.
-# ===========================================================
-
 @torch.jit.script
 def _compute_wrench(alloc_matrix: Tensor, action: Tensor) -> tuple[Tensor, Tensor]:
     """
@@ -48,7 +41,6 @@ def _compute_wrench(alloc_matrix: Tensor, action: Tensor) -> tuple[Tensor, Tenso
     Fz  = W[..., 0]
     tau = W[..., 1:4]
     return Fz, tau
-
 
 @torch.jit.script
 def _translational_deriv(
@@ -102,7 +94,78 @@ def _rotational_deriv(
 
 
 @torch.jit.script
-def _step_pmm(
+def integrate_euler(
+    dt: float,
+    p: Tensor, v: Tensor, q: Tensor, w: Tensor,
+    p_dot: Tensor, v_dot: Tensor, q_dot: Tensor, w_dot: Tensor,
+) -> tuple[Tensor, Tensor, Tensor, Tensor]:
+    v_next = v + v_dot * dt
+    p_next = p + v_next * dt
+    q_next = nn.functional.normalize(q + q_dot * dt, dim=-1)               # renormalize quaternion
+    w_next = w + w_dot * dt
+    return p_next, v_next, q_next, w_next
+
+
+@torch.jit.script
+def _step_fwd(
+    state:         Tensor,
+    thrusts:       Tensor,
+    alloc:         Tensor,
+    m:             Tensor,
+    J:             Tensor,
+    km:            Tensor,
+    a0:            Tensor,
+    motor_tau:     Tensor,
+    G:             Tensor,
+    dt:            float,
+) -> Tensor:
+    """
+    Args:
+        state        : (B, 13)
+        action       : (B,  4)
+        alloc_matrix : (N, 4, 4)
+        m            : (N,) or (1,)
+        J            : (N, 3) or (1, 3)
+        g            : (3,)
+        dt           : scalar float
+
+    Returns:
+        next_state : (B, 13)
+    """
+    p = state[..., 0:3]
+    v = state[..., 3:6]
+    q = state[..., 6:10]
+    w = state[..., 10:13]
+    Omegas = state[..., 13:17]
+
+    # print(thrusts)
+    # print(m)
+    # print(km.view(-1, 1))
+    Omegas_cmd = torch.sqrt(torch.clamp(thrusts / a0.view(-1, 1), min=1e-3))
+    # print(Omegas_cmd)
+
+    Omegas_dot = (Omegas_cmd - Omegas) / motor_tau  # TODO: Improve this.... clamp rate limits
+    # print(f"Omegas_dot: {Omegas_dot}")
+
+    Omegas_next = Omegas + Omegas_dot * dt
+
+    thrusts_next = a0.view(-1, 1) * Omegas_next**2
+    # print(thrusts_next)
+
+    # print(f"Omegas:\n {Omegas}")
+
+    Fz, tau = _compute_wrench(alloc, thrusts_next)
+    p_dot, v_dot = _translational_deriv(v, q, Fz, m, G)
+    q_dot, w_dot = _rotational_deriv(q, w, tau, J)
+
+    p_next, v_next, q_next, w_next = integrate_euler(
+        dt, p, v, q, w, p_dot, v_dot, q_dot, w_dot
+    )
+
+    return torch.cat([p_next, v_next, q_next, w_next, Omegas_next], dim=-1)
+
+@torch.jit.script
+def _step_bck(
     state:         Tensor,
     action:        Tensor,
     alloc_matrix:  Tensor,
@@ -112,10 +175,6 @@ def _step_pmm(
     dt:            float,
 ) -> Tensor:
     """
-    Full dynamics step as a single JIT-compiled function.
-    Keeping all tensor work in one scripted function maximises
-    fusion opportunities for the compiler.
-
     Args:
         state        : (B, 13)
         action       : (B,  4)
@@ -143,12 +202,9 @@ def _step_pmm(
 
     return torch.cat([p_next, v_next, q_next, w_next], dim=-1)
 
-
 # ===========================================================
-# Main class — unchanged public API.
-# torch.compile wraps the hot step() call at instantiation.
+#                        Main class 
 # ===========================================================
-
 class QuadrotorDynamics:
     def __init__(self, cfg: DictConfig):
         self.cfg    = cfg
@@ -178,7 +234,15 @@ class QuadrotorDynamics:
         )                                                               # (1, 3)
         self.km = torch.tensor(
             [cfg.dynamics.km.nominal], device=self.device
-        )                                                               # (1,)
+        ) 
+
+        self.a0 = torch.tensor(
+            [cfg.dynamics.a0.nominal], device=self.device
+        )
+
+        self.motor_tau = torch.tensor(
+            [cfg.dynamics.motor_tau.nominal], device=self.device
+        )                                                               
 
         self._alloc_matrix: Tensor | None = None
 
@@ -189,8 +253,6 @@ class QuadrotorDynamics:
         self.max_TWR  = torch.tensor(
             [cfg.dynamics.max_TWR], device=self.device
         )
-
-
 
     # ------------------------------------------------------------------
     # Internal helpers
@@ -227,17 +289,27 @@ class QuadrotorDynamics:
         Returns:
             next_state : (B, 13)
         """
-        # Delegates entirely to the JIT-compiled core function.
-        # All Python overhead is eliminated inside _step_pmm.
-        return _step_pmm(
-            state,
-            action,
-            self._alloc_matrix,
-            self.m,
-            self.J,
-            self.G,
-            self.dt,
+        return _step_fwd(
+            state=state,
+            thrusts=action,
+            alloc=self._alloc_matrix,
+            m=self.m,
+            J=self.J,
+            km=self.km,
+            a0=self.a0,
+            motor_tau=self.motor_tau,
+            G=self.G,
+            dt=self.dt,
         )
+        # return _step_bck(
+        #     state=state,
+        #     action=action,
+        #     alloc=self._alloc_matrix,
+        #     m=self.m,
+        #     J=self.J,
+        #     G=self.G,
+        #     dt=self.dt,
+        # )
 
     def set_parameters(self, params: QuadrotorParams):
         """
@@ -269,28 +341,9 @@ class QuadrotorDynamics:
     def get_srt_hover_thurst(self):
         return self.m * self.g / 4.0
     
+    def get_srt_hover_speed(self):
+        return torch.sqrt(self.m * self.g / (4.0 * self.motor_tau))
+    
     def get_total_hover_thrust(self):
         return self.m * self.g 
 
-
-
-# ===========================================================
-# torch.compile usage — apply OUTSIDE the class definition.
-#
-# Option A (recommended): compile at the point of instantiation
-#   dynamics = QuadrotorDynamics(cfg)
-#   dynamics.step = torch.compile(dynamics.step, mode="reduce-overhead")
-#
-# Option B: compile the whole class step method (affects all instances)
-#   QuadrotorDynamics.step = torch.compile(
-#       QuadrotorDynamics.step, mode="reduce-overhead"
-#   )
-#
-# Mode guide:
-#   "default"         — safe, good general speedup
-#   "reduce-overhead" — best for small batches / RL envs (reduces kernel launch cost)
-#   "max-autotune"    — slowest to compile, fastest at runtime (large-scale training)
-#
-# Note: torch.compile requires PyTorch >= 2.0 and a CUDA or MPS device to
-# show meaningful gains. On CPU it still helps but less dramatically.
-# ===========================================================
