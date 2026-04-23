@@ -5,6 +5,7 @@ from omegaconf import DictConfig
 from utils.randomize import QuadrotorParams
 from utils.math import quat_to_rotmat, quat_derivative
 
+from dynamics.surrogate_gradient import CustomGrad
 
 #=====================================================
 """
@@ -106,7 +107,7 @@ def integrate_euler(
     return p_next, v_next, q_next, w_next
 
 
-@torch.jit.script
+# @torch.jit.script
 def _step_fwd(
     state:         Tensor,
     thrusts:       Tensor,
@@ -138,21 +139,10 @@ def _step_fwd(
     w = state[..., 10:13]
     Omegas = state[..., 13:17]
 
-    # print(thrusts)
-    # print(m)
-    # print(km.view(-1, 1))
     Omegas_cmd = torch.sqrt(torch.clamp(thrusts / a0.view(-1, 1), min=1e-3))
-    # print(Omegas_cmd)
-
     Omegas_dot = (Omegas_cmd - Omegas) / motor_tau  # TODO: Improve this.... clamp rate limits
-    # print(f"Omegas_dot: {Omegas_dot}")
-
     Omegas_next = Omegas + Omegas_dot * dt
-
     thrusts_next = a0.view(-1, 1) * Omegas_next**2
-    # print(thrusts_next)
-
-    # print(f"Omegas:\n {Omegas}")
 
     Fz, tau = _compute_wrench(alloc, thrusts_next)
     p_dot, v_dot = _translational_deriv(v, q, Fz, m, G)
@@ -164,7 +154,7 @@ def _step_fwd(
 
     return torch.cat([p_next, v_next, q_next, w_next, Omegas_next], dim=-1)
 
-@torch.jit.script
+# @torch.jit.script
 def _step_bck(
     state:         Tensor,
     action:        Tensor,
@@ -279,28 +269,32 @@ class QuadrotorDynamics:
     # ------------------------------------------------------------------
 
     def step(self, state: Tensor, action: Tensor) -> Tensor:
-        """
-        Integrate one time-step forward.
-
-        Args:
-            state  : (B, 13)  [p(3), v(3), q(4), w(3)]
-            action : (B,  4)  per-motor thrust commands
-
-        Returns:
-            next_state : (B, 13)
-        """
-        return _step_fwd(
-            state=state,
-            thrusts=action,
-            alloc=self._alloc_matrix,
-            m=self.m,
-            J=self.J,
-            km=self.km,
-            a0=self.a0,
-            motor_tau=self.motor_tau,
-            G=self.G,
-            dt=self.dt,
+        return CustomGrad.apply(
+            state,
+            action,
+            self._alloc_matrix,
+            self.m,
+            self.J,
+            self.km,
+            self.a0,
+            self.motor_tau,
+            self.G,
+            self.dt,
+            _step_fwd,
+            _step_bck,
         )
+        # return _step_fwd(
+        #     state=state,
+        #     thrusts=action,
+        #     alloc=self._alloc_matrix,
+        #     m=self.m,
+        #     J=self.J,
+        #     km=self.km,
+        #     a0=self.a0,
+        #     motor_tau=self.motor_tau,
+        #     G=self.G,
+        #     dt=self.dt,
+        # )
         # return _step_bck(
         #     state=state,
         #     action=action,

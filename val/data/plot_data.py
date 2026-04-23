@@ -12,13 +12,13 @@ END_SEC   = 33.0
 TRAJ_PATH = "/home/adame/torchAirBender/val/data/airbndr/wx_step.npy"
 BAG_PATH  = "/home/adame/torchAirBender/val/data/gazebo/wx_step.bag"
 
-# # wx sin A = 0-6 rad/s
+# wx sin A = 0-6 rad/s
 # START_SEC = 95.2
 # END_SEC   = START_SEC + 8
 # TRAJ_PATH = "/home/adame/torchAirBender/val/data/airbndr/wx_sin-A0-6.npy"
 # BAG_PATH  = "/home/adame/torchAirBender/val/data/gazebo/wx_sin-A0-6.bag"
 
-# # wx chirp
+# wx chirp
 # START_SEC = 85
 # END_SEC   = START_SEC + 8
 # TRAJ_PATH = "/home/adame/torchAirBender/val/data/airbndr/wx_chirp.npy"
