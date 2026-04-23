@@ -48,6 +48,41 @@ class CTBR:
 
     def __call__(self, state, raw):
         w = state[:, 10:13]
+        Fz    =  raw[:, 0:1] * (self.max_total_thrust - self.min_thrust) + self.min_thrust
+        # Fz    =  raw[:, 0:1] # SUPERCARFEWUL WIH THIS; PUT IT BACk ❌⚠️❌💥❌⚠️
+        w_des = (raw[:, 1:4] * 2.0 - 1.0) * self.max_rate
+        # w_des = raw[:, 1:4] # SUPERCARFEWUL WIH THIS; PUT IT BACk ❌⚠️❌💥❌⚠️
+        tau = self.J * (self.kp_rate * (w_des - w) / self.dt)  # (N, 3)
+        wrench = torch.cat([Fz, tau], dim=-1)
+        return torch.cat([self.allocator(Fz, tau), wrench], dim=-1)
+    
+
+    def update_params(self, alloc_matrix=None, mass=None, J=None, max_TWR=None, min_thrust=None):
+        if alloc_matrix is not None:
+            self.allocator.update_params(alloc_matrix)
+        if J is not None:
+            self.J = J
+        if mass is not None or max_TWR is not None:
+            self.mass    = mass    if mass    is not None else self.mass
+            self.max_TWR = max_TWR if max_TWR is not None else self.max_TWR
+            self.max_total_thrust = (self.max_TWR * self.mass * 9.81).unsqueeze(-1)
+        if min_thrust is not None:
+            self.min_thrust = min_thrust * 4.0  
+
+class CTBR_TEST:
+    def __init__(self, allocator, J, mass, max_TWR, min_thrust=0.5, max_rate=10.0, kp_rate=1.0, dt=0.01):
+        self.allocator  = allocator
+        self.mass       = mass
+        self.max_TWR    = max_TWR
+        self.max_total_thrust = (max_TWR * mass * 9.81).unsqueeze(-1)
+        self.min_thrust = min_thrust * 4.0 # TODO: fix this xd 
+        self.max_rate   = max_rate
+        self.kp_rate    = kp_rate
+        self.J          = J
+        self.dt         = dt
+
+    def __call__(self, state, raw):
+        w = state[:, 10:13]
         # Fz    =  raw[:, 0:1] * (self.max_total_thrust - self.min_thrust) + self.min_thrust
         Fz    =  raw[:, 0:1] # SUPERCARFEWUL WIH THIS; PUT IT BACk ❌⚠️❌💥❌⚠️
         # w_des = (raw[:, 1:4] * 2.0 - 1.0) * self.max_rate

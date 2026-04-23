@@ -29,7 +29,7 @@ CM_COLS = {"srt": 26, "ctbr": 30, "lvyr": 34, "lvyr+g": 37}
 
 def reset(cfg, traj, quadrotor, controller):
     pos0, vel0, acc0, _ = traj.get_reference(0)
-    states = torch.zeros((cfg.num_envs, 13), device=cfg.device)
+    states = torch.zeros((cfg.num_envs, 17), device=cfg.device)
     states[:, 0:3]  = pos0.detach()
     states[:, 3:6]  = vel0.detach()
     states[:, 6:10] = acc_to_quat(acc0.detach())
@@ -54,6 +54,7 @@ def reset_terminated(states, terminated, pos_ref, vel_ref, acc_ref):
     states[idx, 3:6]   = vel_ref[idx].detach()
     states[idx, 6:10]  = acc_to_quat(acc_ref[idx].detach())
     states[idx, 10:13] = 0.0
+    states[idx, 13:17] = 0.0
     return states
 
 

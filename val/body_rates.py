@@ -4,7 +4,7 @@ from omegaconf import DictConfig
 
 from utils.randomize import randomize_parameters
 from dynamics.quadrotor_dynamics import QuadrotorDynamics
-from controller.controllers import DirectAllocation, SRT, CTBR
+from controller.controllers import DirectAllocation, SRT, CTBR_TEST
 from utils.replay_old_w_fpv import BaseRenderer
 
 def validate(cfg: DictConfig):
@@ -38,7 +38,7 @@ def validate(cfg: DictConfig):
     action = torch.full((num_envs, 4), srt_hover[0], device=device)
 
     alloc = DirectAllocation(quadrotor._alloc_matrix)
-    controller = CTBR(
+    controller = CTBR_TEST(
             allocator=alloc,
             mass=quadrotor.m,
             max_TWR=quadrotor.max_TWR,
@@ -52,12 +52,17 @@ def validate(cfg: DictConfig):
     n = state.size(1) + action.size(1)
     traj_env0 = torch.empty((steps, n+1), device=device)
 
+    t_vec = torch.linspace(0, steps * dt, steps, device=device)
+    f0, f1, T = 0.1, 2.0, steps * dt
+    phase = 2 * np.pi * (f0 * t_vec + (f1 - f0) / (2 * T) * t_vec**2)
+    chirp_signal = 1 * torch.sin(phase)
     setpoint = torch.zeros(num_envs, device=device)
-    # print(setpoint)
 
     for t in range(steps):
-        if t == 200:
-            setpoint.fill_(1.0)
+        # setpoint = chirp_signal[t].expand(num_envs)
+        # if t == 200:
+        # setpoint = 6.0 * torch.sin(t_vec[t]).expand(num_envs)
+        setpoint = (0.0 + (6.0 * t * dt/T)) * torch.sin(2 * t_vec[t]).expand(num_envs)
 
         cmd = torch.stack([
             torch.full_like(setpoint, 4 * srt_hover[0]),  # Hover Thrust
@@ -82,12 +87,16 @@ def validate(cfg: DictConfig):
 
 
     import matplotlib.pyplot as plt
+    # s = setpoint[0].cpu().numpy()
+    # print(s)
     # print(traj_np[:-1])
-    plt.plot(traj_np[:, -1])
-    plt.plot(traj_np[:, 10])
+    plt.plot(traj_np[:, -1], label='ref', c='k', ls='--')
+    plt.plot(traj_np[:, 10], label='omega_x', c='tab:blue')
     # plt.plot(traj_np[:, 2])
     plt.xlim([0, steps])
-    plt.ylim([0, 1.1])
+    plt.ylim([-6, 6 + 0.2])
+    plt.grid()
+    plt.legend()
     plt.show()
 
 

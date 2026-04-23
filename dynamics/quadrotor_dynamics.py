@@ -168,10 +168,10 @@ def _step_fwd(
 def _step_bck(
     state:         Tensor,
     action:        Tensor,
-    alloc_matrix:  Tensor,
+    alloc:         Tensor,
     m:             Tensor,
     J:             Tensor,
-    g:             Tensor,
+    G:             Tensor,
     dt:            float,
 ) -> Tensor:
     """
@@ -192,8 +192,8 @@ def _step_bck(
     q = state[..., 6:10]
     w = state[..., 10:13]
 
-    Fz, tau = _compute_wrench(alloc_matrix, action)
-    p_dot, v_dot = _translational_deriv(v, q, Fz, m, g)
+    Fz, tau = _compute_wrench(alloc, action)
+    p_dot, v_dot = _translational_deriv(v, q, Fz, m, G)
     q_dot, w_dot = _rotational_deriv(q, w, tau, J)
 
     p_next, v_next, q_next, w_next = integrate_euler(

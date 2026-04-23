@@ -6,18 +6,49 @@ from pathlib import Path
 # ==========================================
 # CONFIGURATION - CHANGE THESE OFTEN
 # ==========================================
-START_SEC = 31.0
+# wx step
+START_SEC = 31.51
 END_SEC   = 33.0
+TRAJ_PATH = "/home/adame/torchAirBender/val/data/airbndr/wx_step.npy"
+BAG_PATH  = "/home/adame/torchAirBender/val/data/gazebo/wx_step.bag"
+
+# # wx sin A = 0-6 rad/s
+# START_SEC = 95.2
+# END_SEC   = START_SEC + 8
+# TRAJ_PATH = "/home/adame/torchAirBender/val/data/airbndr/wx_sin-A0-6.npy"
+# BAG_PATH  = "/home/adame/torchAirBender/val/data/gazebo/wx_sin-A0-6.bag"
+
+# # wx chirp
+# START_SEC = 85
+# END_SEC   = START_SEC + 8
+# TRAJ_PATH = "/home/adame/torchAirBender/val/data/airbndr/wx_chirp.npy"
+# BAG_PATH  = "/home/adame/torchAirBender/val/data/gazebo/wx_chirp.bag"
+
 DT_TORCH  = 0.01 
 
 # Indices in your traj_np array
 OMEGA_X_INDEX = 10 
 REF_INDEX     = -1 # Adjust this index to wherever your omega_x setpoint is
 
-TIME_OFFSET = 29.54 
+# TIME_OFFSET = 85
+TIME_OFFSET = START_SEC
 
-TRAJ_PATH = "/home/adame/torchAirBender/val/data/airbndr/traj_data.npy"
-BAG_PATH  = "/home/adame/torchAirBender/val/data/gazebo/rates.bag"
+
+
+
+# wx sin
+# START_SEC = 74
+# END_SEC   = 86
+# TRAJ_PATH = "/home/adame/torchAirBender/val/data/airbndr/wx_sin.npy"
+# BAG_PATH  = "/home/adame/torchAirBender/val/data/gazebo/wx_sin.bag"
+
+# # wx sin A = 6 rad/s
+# START_SEC = 109.24
+# END_SEC   = START_SEC + 8
+# TRAJ_PATH = "/home/adame/torchAirBender/val/data/airbndr/wx_sin-A6.npy"
+# BAG_PATH  = "/home/adame/torchAirBender/val/data/gazebo/wx_sin-A6.bag"
+
+
 TOPIC_NAME = '/uav1/estimation_manager/ground_truth/odom'
 # ==========================================
 
@@ -57,7 +88,7 @@ def get_comparison_plot():
     
     # Reference Step (usually plotted as a black dashed or thin line)
     plt.plot(torch_stamps[torch_mask], omega_x_ref[torch_mask], 
-             label='Reference', color='black', linestyle=':', alpha=0.8, lw=1.5, zorder=5)
+             label='Reference', color='black', linestyle='--', alpha=0.8, lw=1.5, zorder=5)
     
     # Torch Data
     plt.plot(torch_stamps[torch_mask], omega_x_torch[torch_mask], 
@@ -65,7 +96,7 @@ def get_comparison_plot():
     
     # Gazebo Data
     plt.plot(odom_stamps, odom_vals, 
-             label='Gazebo', color='tab:orange', lw=2)
+             label='Gazebo', color='tab:green', lw=2)
 
     plt.title(r"Pitch Rate Step Response")
     plt.xlabel("Time (s)")

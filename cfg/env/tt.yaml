@@ -17,7 +17,7 @@ loss_weights:
 traj:
   num_harmonics: 3  # must be integer
   z_offset: 0.0
-  A: 2.0
+  A: 1.0
   w: 1.0
   phi: 2.0
   dt: 0.01
@@ -29,5 +29,6 @@ rmse_threshold: 0.15
 w_increase: 0.1
 
 # # For the CTBR controller
-kp_rate: 1.0
+kp_rate: 0.2
+# kp_rate: 1.0
 w_max: 5.0
