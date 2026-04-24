@@ -25,7 +25,7 @@ ACT_DIMS = {
     "lvyr":   4,
     "lvyr+g": 7,
 }
-CM_COLS = {"srt": 26, "ctbr": 30, "lvyr": 34, "lvyr+g": 37}
+CM_COLS = {"srt": 30, "ctbr": 34, "lvyr": 38, "lvyr+g": 41}
 
 def reset(cfg, traj, quadrotor, controller):
     pos0, vel0, acc0, _ = traj.get_reference(0)
@@ -196,11 +196,11 @@ def train(cfg: DictConfig):
 
             if ep == cfg.episodes - 1:
                 traj_data[t] = torch.cat([
-                    states[0].detach(),       # 0:13  — full state
-                    pos_ref[0].detach(),      # 13:16 — p_ref
-                    vel_ref[0].detach(),      # 16:19 — v_ref
-                    acc_ref[0].detach(),      # 19:23 — a_ref
-                    actions[0].detach(),      # 23:N  — srt + (wrench + lvyr + gains)
+                    states[0].detach(),       # 0:17  — full state
+                    pos_ref[0].detach(),      # 17:20 — p_ref
+                    vel_ref[0].detach(),      # 20:23 — v_ref
+                    acc_ref[0].detach(),      # 23:26 — a_ref
+                    actions[0].detach(),      # 26:N  — srt + (wrench + lvyr + gains)
                 ], dim=0)
 
             if (t + 1) % cfg.truncation == 0 or (t + 1) == cfg.steps:
@@ -248,7 +248,7 @@ def train(cfg: DictConfig):
         # save_path = f"/home/adame/torchAirBender/outputs/plots/{cm}_dashboard.png",  # uncomment to save instead of show
     )
     # ---- Render ------
-    MultiDroneRenderer(trajectory=traj_np, ref_trajectory=traj_np[:, 13:16]).run()
+    MultiDroneRenderer(trajectory=traj_np, ref_trajectory=traj_np[:, 17:20]).run()
 
 
 # ==================================================================

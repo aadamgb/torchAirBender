@@ -26,7 +26,7 @@ GAIN_COLORS    = ['tab:cyan', 'tab:purple', 'tab:pink']
 # Action unpacking
 # ──────────────────────────────────────────────────────────────────────────────
 def _infer_cm(traj_np: np.ndarray) -> str:
-    return {26: "srt", 30: "ctbr", 34: "lvyr", 37: "lvyr+g"}[traj_np.shape[1]]
+    return {30: "srt", 34: "ctbr", 38: "lvyr", 41: "lvyr+g"}[traj_np.shape[1]]
 
 def _unpack_actions(traj_np: np.ndarray, cm: str) -> dict:
     """
@@ -39,16 +39,16 @@ def _unpack_actions(traj_np: np.ndarray, cm: str) -> dict:
     30:34  lvyr cmds  (lvyr and above)
     34:37  gains      (lvyr+g only)
     """
-    out = dict(srt=traj_np[:, 22:26])
+    out = dict(srt=traj_np[:, 26:30])
 
     if cm in ("ctbr", "lvyr", "lvyr+g"):
-        out["wrench"] = traj_np[:, 26:30]
+        out["wrench"] = traj_np[:, 30:34]
 
     if cm in ("lvyr", "lvyr+g"):
-        out["lvyr"] = traj_np[:, 30:34]
+        out["lvyr"] = traj_np[:, 34:38]
 
     if cm == "lvyr+g":
-        out["gains"] = traj_np[:, 34:37]
+        out["gains"] = traj_np[:, 38:41]
 
     return out
 
@@ -306,9 +306,9 @@ def plot_rollout(
     # ── Unpack ───────────────────────────────────────────────────────────
     state_pos = traj_np[:, 0:3]
     state_vel = traj_np[:, 3:6]
-    p_ref = traj_np[:, 13:16]
-    v_ref = traj_np[:, 16:19]
-    a_ref = traj_np[:, 19:22]
+    p_ref = traj_np[:, 17:20]
+    v_ref = traj_np[:, 20:23]
+    a_ref = traj_np[:, 23:26]
 
     acts = _unpack_actions(traj_np, cm)
 
