@@ -39,11 +39,12 @@ class CustomGrad(torch.autograd.Function):
         ctx.dt       = dt
         ctx.step_bck = step_bck
 
-        return step_fwd(
-            state=state, thrusts=thrusts, alloc=alloc,
-            m=m, J=J, km=km, a0=a0, motor_tau=motor_tau,
-            G=G, dt=dt,
-        )
+        with torch.no_grad():
+            return step_fwd(
+                state=state, thrusts=thrusts, alloc=alloc,
+                m=m, J=J, km=km, a0=a0, motor_tau=motor_tau,
+                G=G, dt=dt,
+            )
 
     @staticmethod
     def backward(ctx, grad_output: Tensor):
@@ -62,19 +63,15 @@ class CustomGrad(torch.autograd.Function):
 
         # _step_bck returns (B, 13); _step_fwd returns (B, 17).
         # Slice grad_output to match the surrogate output width.
-        surrogate_out.backward(grad_output[..., : surrogate_out.shape[-1]])
+        grads = torch.autograd.grad(
+                surrogate_out, 
+                (state_, thrusts_), 
+                grad_outputs=grad_output[..., :surrogate_out.shape[-1]],
+                create_graph=False
+            )
 
         return (
-            state_.grad,    # state
-            thrusts_.grad,  # thrusts
-            None,           # alloc
-            None,           # m
-            None,           # J
-            None,           # km
-            None,           # a0
-            None,           # motor_tau
-            None,           # G
-            None,           # dt
-            None,           # step_fwd callable
-            None,           # step_bck callable
+            grads[0],  # state
+            grads[1],  # action  (thrusts)
+            None, None, None, None, None, None, None, None, None, None
         )
