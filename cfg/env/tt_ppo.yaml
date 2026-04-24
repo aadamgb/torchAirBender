@@ -1,0 +1,30 @@
+name: trajectory_tracking
+abbr: tt_ppo
+
+policy: [16, 128, 128]
+lr: 1e-3
+
+loss_weights:
+  pos: 2.0
+  vel: 1.0
+  att: 0.2
+  body_rates: 0.2
+
+traj:
+  num_harmonics: 3
+  z_offset: 2.0
+  A: 1.0
+  w: 1.0
+  phi: 2.0
+  dt: 0.01
+
+max_dist_to_target: 5.0
+
+kp_rate: 0.2
+w_max: 5.0
+
+ppo:
+  # n_steps: 800
+  # batch_size: 64
+  gamma: 0.99
+  total_timesteps: 10_000_000
