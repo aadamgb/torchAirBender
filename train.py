@@ -4,7 +4,7 @@ import importlib
 import time
 
 
-@hydra.main(config_path="cfg", config_name="config")
+@hydra.main(version_base=None, config_path="cfg", config_name="config")
 def main(cfg: DictConfig):
     try:
         environment = importlib.import_module(f"env.{cfg.env.name}")

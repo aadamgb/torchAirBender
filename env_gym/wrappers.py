@@ -61,24 +61,9 @@ class TorchVecEnv(VecEnv):
     def step_wait(self):
         obs, reward, terminated, truncated, info = self.env.step(self._actions)
         done = terminated | truncated
-
-        infos = []
-        for i in range(self.num_envs):
-            d = {
-                # "pos_err": info[i]["pos_err"],
-                # "vel_err": info[i]["vel_err"],
-                "episode": {                        # ← always populate
-                    "r":       float(reward[i]),
-                    "l":       self.env.t,
-                    # "pos_err": info[i]["pos_err"],
-                    # "vel_err": info[i]["vel_err"],
-                }
-            }
-            if terminated[i] or truncated[i]:
-                d["terminal_observation"] = obs[i]
-            infos.append(d)
-
+        infos = [{} for _ in range(self.num_envs)]
         return obs, reward, done, infos
+    
     def close(self):
         self.env.close()
 

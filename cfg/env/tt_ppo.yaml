@@ -1,20 +1,20 @@
 name: trajectory_tracking
 abbr: tt_ppo
 
-policy: [16, 128, 128]
+hidden_layers: [128, 128]
 lr: 1e-3
 
 loss_weights:
-  pos: 2.0
+  pos: 4.0
   vel: 1.0
-  att: 0.2
-  body_rates: 0.2
+  att: 0.5
+  rates: 0.5
 
 traj:
   num_harmonics: 3
   z_offset: 2.0
   A: 1.0
-  w: 1.0
+  w: 2.0
   phi: 2.0
   dt: 0.01
 
