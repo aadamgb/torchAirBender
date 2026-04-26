@@ -76,7 +76,9 @@ def compute_loss(states, pos_ref, vel_ref, acc_ref, weights, mask=None):
                   for x in (states, pos_ref, vel_ref, acc_ref))
 
     pos_loss  = torch.linalg.norm(p - s[:, 0:3], dim=-1).mean()
+    # pos_loss  =  torch.sum((p - s[:, 0:3])**2, dim=-1).mean()
     vel_loss  = torch.linalg.norm(v - s[:, 3:6], dim=-1).mean()
+    # vel_loss  =  torch.sum((v - s[:, 3:6])**2, dim=-1).mean()
     rate_loss = (s[:, 10:13] ** 2).sum(dim=-1).mean()
 
     from utils.math import quat_to_rotmat
@@ -150,6 +152,7 @@ def train(cfg: DictConfig):
     # policy.load_state_dict(torch.load("/home/adame/torchAirBender/outputs/policies/CAMP/uzh/ctbr/uzh_starter.pt", map_location=device))
     
     optimizer = torch.optim.Adam(policy.parameters(), lr=cfg.env.lr)
+    # optimizer = torch.optim.AdamW(policy.parameters(), lr=cfg.env.lr)
 
     traj_data = torch.empty((cfg.steps, CM_COLS[cm]), device=device)
     last_saved_w = 1.0

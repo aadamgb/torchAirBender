@@ -7,10 +7,10 @@ from pathlib import Path
 # CONFIGURATION - CHANGE THESE OFTEN
 # ==========================================
 # wx step
-START_SEC = 31.51
-END_SEC   = 33.0
-TRAJ_PATH = "/home/adame/torchAirBender/val/data/airbndr/wx_step.npy"
-BAG_PATH  = "/home/adame/torchAirBender/val/data/gazebo/wx_step.bag"
+# START_SEC = 31.51
+# END_SEC   = 33.0
+# TRAJ_PATH = "/home/adame/torchAirBender/val/data/airbndr/wx_step.npy"
+# BAG_PATH  = "/home/adame/torchAirBender/val/data/gazebo/wx_step.bag"
 
 # wx sin A = 0-6 rad/s
 # START_SEC = 95.2
@@ -19,10 +19,10 @@ BAG_PATH  = "/home/adame/torchAirBender/val/data/gazebo/wx_step.bag"
 # BAG_PATH  = "/home/adame/torchAirBender/val/data/gazebo/wx_sin-A0-6.bag"
 
 # wx chirp
-# START_SEC = 85
-# END_SEC   = START_SEC + 8
-# TRAJ_PATH = "/home/adame/torchAirBender/val/data/airbndr/wx_chirp.npy"
-# BAG_PATH  = "/home/adame/torchAirBender/val/data/gazebo/wx_chirp.bag"
+START_SEC = 85
+END_SEC   = START_SEC + 8
+TRAJ_PATH = "/home/adame/torchAirBender/val/data/airbndr/wx_chirp.npy"
+BAG_PATH  = "/home/adame/torchAirBender/val/data/gazebo/wx_chirp.bag"
 
 DT_TORCH  = 0.01 
 
@@ -106,6 +106,40 @@ def get_comparison_plot():
     plt.grid(True, alpha=0.3)
     plt.tight_layout()
     plt.show()
+
+
+    # --- Export The Data (time, omega) ---
+    torch_stamps = np.asarray(torch_stamps[torch_mask], dtype=float)
+    t1 = torch_stamps -torch_stamps[0]
+
+    odom_stamps = np.asarray(odom_stamps, dtype=float)
+    t2 = odom_stamps - odom_stamps[0]
+
+    ref_export = np.column_stack((t1, omega_x_ref[torch_mask]))
+    ours_export = np.column_stack((t1, omega_x_torch[torch_mask]))
+    gazebo_export = np.column_stack((t2, odom_vals))
+
+    np.savetxt(
+        f'val/data/exported_csv/wx_freq_ours.csv',
+        ours_export,
+        delimiter=',',
+        header='time,omega_x',
+        comments=''
+    )
+    np.savetxt(
+        f'val/data/exported_csv/wx_freq_gazebo.csv',
+        gazebo_export,
+        delimiter=',',
+        header='time,omega_x',
+        comments=''
+    )
+    np.savetxt(
+        f'val/data/exported_csv/ref_freq.csv',
+        ref_export,
+        delimiter=',',
+        header='time,omega_x',
+        comments=''
+    )
 
 if __name__ == "__main__":
     get_comparison_plot()

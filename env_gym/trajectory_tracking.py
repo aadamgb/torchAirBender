@@ -8,7 +8,7 @@ from dynamics.quadrotor_dynamics import QuadrotorDynamics
 from controller.controllers import DirectAllocation, CTBR
 from utils.randomize import randomize_parameters
 from utils.trajectory import TrajectoryManager
-from utils.math import acc_to_quat
+from utils.math import acc_to_quat, quat_to_rotmat
 
 from utils.replay_multi import MultiDroneRenderer
 
@@ -98,25 +98,35 @@ class TrajTrckEnv(gym.Env):
         action_t = torch.tensor(action, dtype=torch.float32, device=self.device) 
         pos_ref, vel_ref, acc_ref, _ = self.traj.get_reference(self.t)
 
-        # Low-level controller + full forward dynamics
-        # Note: _step_fwd is used (via CustomGrad.apply) — full motor lag
+
         # TODO: Add bool to not use customgrad when trianing whit PPo
         actions_full = self.controller(self.states, action_t)
         self.states  = self.quadrotor.step(self.states, actions_full[:, 0:4])
         self.t      += 1
 
-        # --- Reward --- TODO: Match it with BPTT loss function ❗❗⚠️️⚠️❗❗❗⚠️⚠️
-        pos_err  = torch.linalg.norm(pos_ref - self.states[:, 0:3], dim=-1)
-        vel_err  = torch.linalg.norm(vel_ref - self.states[:, 3:6], dim=-1)
-        reward_t = -(
-            self.cfg.env.loss_weights.pos * pos_err +
-            self.cfg.env.loss_weights.vel * vel_err
-        )
-        reward = reward_t.cpu().numpy().astype(np.float32)   # (N,)
+        body_z     = quat_to_rotmat(self.states[:, 6:10])[:, :, 2]
+        gravity    = torch.tensor([0., 0., -9.81], device=self.device)
+        thrust_dir = torch.nn.functional.normalize(acc_ref + gravity, dim=-1)
 
+        # --- Reward --- TODO: Match it with BPTT loss function ❗❗⚠️️⚠️❗❗❗⚠️⚠️
+        pos_sq = torch.sum((pos_ref - self.states[:, 0:3])**2, dim=-1)
+        vel_sq = torch.sum((vel_ref - self.states[:, 3:6])**2, dim=-1)
+        
+        pos_loss = torch.linalg.norm(pos_ref - self.states[:, 0:3], dim=-1)
+        vel_loss = torch.linalg.norm(vel_ref - self.states[:, 3:6], dim=-1)
+        rates = (self.states[:, 10:13]**2).sum(dim=-1)
+        att   = (1.0 - (body_z * thrust_dir).sum(dim=-1).clamp(-1, 1))
+        survival = torch.ones(self.num_envs, device=self.device) * 0.5
+
+        reward_t = -( self.cfg.env.loss_weights.pos   * pos_loss + 
+                      self.cfg.env.loss_weights.vel   * vel_loss +
+                      self.cfg.env.loss_weights.att   *    att +
+                      self.cfg.env.loss_weights.rates * rates) + survival
+        
+        reward = reward_t.cpu().numpy().astype(np.float32)
+    
         # --- Termination ---
-        too_far    = (pos_err > self.cfg.env.max_dist_to_target)
-        terminated = too_far.cpu().numpy()                    # (N,) bool
+        terminated = (pos_sq > self.cfg.env.max_dist_to_target**2).cpu().numpy()    
 
         # --- Reset Terminated  ---
         if terminated.any():
@@ -125,11 +135,14 @@ class TrajTrckEnv(gym.Env):
             self.states[idx, 3:6]  = vel_ref[idx].detach()
             self.states[idx, 6:10] = acc_to_quat(acc_ref[idx].detach())
             self.states[idx, 10:]  = 0.0
-            reward[terminated]    -= 5.0  # termination penalty
+            
+            # termination penalty
+            reward[terminated]    -= 5.0  
             
         # --- Truncation ---
         truncated = np.full(self.num_envs, self.t >= self.max_steps, dtype=bool)
 
+        # --- Save States for Rendering ---
         if self._record and self.t < self.max_steps:
             pos_ref, vel_ref, acc_ref, _ = self.traj.get_reference(self.t)
             self.traj_data[self.t] = torch.cat([
@@ -141,12 +154,15 @@ class TrajTrckEnv(gym.Env):
             ], dim=0)
 
         obs  = self._get_obs()
-        # info = [{
-        #     "pos_err": pos_err[i].item(),
-        #     "vel_err": vel_err[i].item()
-        # } for i in range(self.num_envs)]
 
-        info = {}
+        # self.pos_mse_mean = pos_sq.mean().item()
+        # self.vel_mse_mean = vel_sq.mean().item()
+        self.pos_mse_mean = pos_loss.mean().item()
+        self.vel_mse_mean = vel_loss.mean().item()
+        self.reward_mean   = reward_t.mean().item()
+
+        info = {} 
+
         return obs, reward, terminated, truncated, info
     
     # ============================================================
