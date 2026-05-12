@@ -141,16 +141,22 @@ def _step_fwd(
 
     Omegas_cmd = torch.sqrt(torch.clamp(thrusts / a0.view(-1, 1), min=1e-3))
     Omegas_dot = (Omegas_cmd - Omegas) / motor_tau  # TODO: Improve this.... clamp rate limits
+    # Omegas_dot = (Omegas_cmd - Omegas) / 0.17  # TODO: Improve this.... clamp rate limits
     Omegas_next = Omegas + Omegas_dot * dt
+    # Omegas_next = torch.clamp(Omegas_next, 0.0, 21400 )
     thrusts_next = a0.view(-1, 1) * Omegas_next**2
 
     Fz, tau = _compute_wrench(alloc, thrusts_next)
     p_dot, v_dot = _translational_deriv(v, q, Fz, m, G)
     q_dot, w_dot = _rotational_deriv(q, w, tau, J)
 
+    w_dot[:, 2] = torch.clamp(w_dot[:, 2], -5.0, 5.0)
+
     p_next, v_next, q_next, w_next = integrate_euler(
         dt, p, v, q, w, p_dot, v_dot, q_dot, w_dot
     )
+
+    w_next[:, 2] = torch.clamp(w_next[:, 2], -3.0, 3.0)
 
     return torch.cat([p_next, v_next, q_next, w_next, Omegas_next], dim=-1)
 

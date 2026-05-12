@@ -1,0 +1,5 @@
+- env=tt
+- cm=ctbr
+- steps=1000
+- num_envs=1000
+- episodes=50

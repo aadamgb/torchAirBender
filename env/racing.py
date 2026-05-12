@@ -1,499 +1,410 @@
 import os
+import csv
 import time
 import torch
-from torch import Tensor
 from torch import nn
-
-from omegaconf import DictConfig, OmegaConf
+from omegaconf import DictConfig
+from pathlib import Path
 
 from utils.nn import MLP
-from utils.randomize import QuadrotorParams, randomize_parameters
-from utils.replay import RacingRenderer
-from utils.math import quat_to_rotmat
+from utils.randomize import randomize_parameters
+from utils.replay_multi import MultiDroneRenderer
+from utils.trajectory import TrajectoryManager, HypotrochoidTrajectory, CircularTrajectory
+from utils.math import acc_to_quat, quat_to_rotmat
+from utils.plotter import plot_rollout
 
 from dynamics.quadrotor_dynamics import QuadrotorDynamics
-from controller.controllers_old import SRTController_old
-
-from miscellaneous.loader import load_gates_from_yaml, load_TOGT
+from controller.controllers import DirectAllocation, SRT, CTBR, LVHR
 
 
-# ==============================================================
-# Trajectory helpers
-# ==============================================================
+ACT_DIMS = {
+    "srt":    4,
+    "ctbr":   4,
+    "lvhr":   4,
+    "lvhr+g": 7,
+}
+CM_COLS = {"srt": 30, "ctbr": 34, "lvhr": 38, "lvhr+g": 41}
 
-def generate_trajectory_params(
-    num_envs: int,
-    device,
-    cfg: DictConfig,
-) -> dict:
-    """
-    Generates random harmonic trajectory coefficients for each environment.
-
-    Returns a dict with tensors of shape (num_envs, 3, num_harmonics):
-        amps     : amplitudes
-        freqs    : frequencies
-        phases   : phases
-        z_offset : scalar float added to z position at eval time
-    """
-    amps   = torch.rand((num_envs, 3, cfg.num_harmonics), device=device) * cfg.A + 0.5
-    freqs  = torch.rand((num_envs, 3, cfg.num_harmonics), device=device) * cfg.w + 0.2
-    phases = torch.rand((num_envs, 3, cfg.num_harmonics), device=device) * cfg.phi * torch.pi
-
-    return {"amps": amps, "freqs": freqs, "phases": phases, "z_offset": cfg.z_offset}
-
-
-def get_target(
-    t: float,
-    params: dict,
-) -> tuple[Tensor, Tensor, Tensor]:
-    """
-    Evaluates the trajectory at time t for all environments.
-
-    Args:
-        t      : current time (scalar float)
-        params : dict from generate_trajectory_params
-
-    Returns:
-        pos : (num_envs, 3)
-        vel : (num_envs, 3)
-        acc : (num_envs, 3)
-    """
-    amps, freqs, phases = params["amps"], params["freqs"], params["phases"]
-
-    t_tensor = torch.full(
-        (amps.shape[0], 1, 1), t, device=amps.device, dtype=amps.dtype
-    )
-
-    angle = freqs * t_tensor + phases                               # (N, 3, H)
-
-    pos = torch.sum(amps * torch.sin(angle),              dim=2)    # (N, 3)
-    vel = torch.sum(amps * freqs * torch.cos(angle),      dim=2)    # (N, 3)
-    acc = torch.sum(-amps * freqs**2 * torch.sin(angle),  dim=2)    # (N, 3)
-
-    pos[:, 2] = pos[:, 2] + params["z_offset"]
-
-    return pos, vel, acc
-
-
-def build_get_ref(cfg: DictConfig, device, dt: float, speed_scale=1.0 ):
-    """
-    Returns a get_ref(t: int) -> (pos, vel, acc) callable.
-
-    If cfg.load_traj is True, loads from CSV (positions broadcast to all envs).
-    Otherwise generates random harmonic trajectory params per env.
-
-    Returns:
-        get_ref    : callable(t: int) -> (pos, vel, acc) each (N, 3)
-        traj_params: dict or None (None when loading from CSV)
-    """
-    if cfg.env.load_traj == True:
-        # print("Loading trajectory from CSV!")
-        loaded = load_TOGT(cfg.env.test_traj, cfg.steps, device)
-
-        def get_ref(t: int):
-            # map t -> scaled index into the trajectory
-            scaled_t = min(int(t * speed_scale), len(loaded["pos"]) - 1)
-            pos = loaded["pos"][scaled_t].unsqueeze(0).expand(cfg.num_envs, -1)
-            vel = loaded["vel"][scaled_t].unsqueeze(0).expand(cfg.num_envs, -1) * speed_scale
-            acc = loaded["acc"][scaled_t].unsqueeze(0).expand(cfg.num_envs, -1) * speed_scale ** 2
-            return pos, vel, acc
-
-        return get_ref, None
-
-    else:
-        traj_params = generate_trajectory_params(cfg.num_envs, device, cfg.env.traj)
-
-        def get_ref(t: int):
-            return get_target(t * dt, traj_params)
-
-        return get_ref, traj_params
-
-
-# ==============================================================
-# State helpers
-# ==============================================================
-
-def acc_to_quat(acc_ref: Tensor, g: float = 9.81) -> Tensor:
-    """
-    Computes desired quaternion from reference acceleration.
-    Desired thrust direction = acc_ref + gravity_vector.
-
-    Args:
-        acc_ref : (N, 3)
-    Returns:
-        q_des   : (N, 4)  [w, x, y, z]
-    """
-    gravity    = torch.tensor([0.0, 0.0, g], device=acc_ref.device)
-    thrust_dir = acc_ref + gravity
-    thrust_dir = torch.nn.functional.normalize(thrust_dir, dim=-1)
-
-    world_z       = torch.zeros_like(thrust_dir)
-    world_z[:, 2] = 1.0
-
-    axis = torch.linalg.cross(world_z, thrust_dir)                   # (N, 3)
-    dot  = (world_z * thrust_dir).sum(dim=-1, keepdim=True)          # (N, 1)
-
-    w   = torch.sqrt(torch.clamp((1.0 + dot) / 2.0, min=1e-6))
-    xyz = torch.nn.functional.normalize(axis, dim=-1) * torch.sqrt(
-        torch.clamp((1.0 - dot) / 2.0, min=0.0)
-    )
-
-    return torch.cat([w, xyz], dim=-1)                               # (N, 4)
-
-
-def reset(
-    cfg: DictConfig,
-    pos0: Tensor,
-    vel0: Tensor,
-    acc0: Tensor,
-) -> tuple[Tensor, QuadrotorParams]:
-    """Reset all envs to the given t=0 reference."""
-    num_envs = cfg.num_envs
-    device   = cfg.device
-
-    states = torch.zeros((num_envs, 13), device=device)
+def reset(cfg, traj, quadrotor, controller):
+    pos0, vel0, acc0, _ = traj.get_reference(0)
+    states = torch.zeros((cfg.num_envs, 17), device=cfg.device)
     states[:, 0:3]  = pos0.detach()
     states[:, 3:6]  = vel0.detach()
     states[:, 6:10] = acc_to_quat(acc0.detach())
 
-    params = randomize_parameters(cfg.dynamics, num_envs, device)
+    params = randomize_parameters(cfg.dynamics, cfg.num_envs, cfg.device)
+    quadrotor.set_parameters(params)
+    controller.update_params(
+        alloc_matrix = quadrotor._alloc_matrix,
+        mass         = quadrotor.m,
+        max_TWR      = quadrotor.max_TWR,
+        J            = quadrotor.J,
+    )
     return states, params
 
 
-def reset_terminated(
-    states:     Tensor,
-    terminated: Tensor,    # (N,) bool
-    pos_ref:    Tensor,    # (N, 3)
-    vel_ref:    Tensor,    # (N, 3)
-    acc_ref:    Tensor,    # (N, 3)
-) -> Tensor:
-    """Snap terminated envs back to current reference position and velocity."""
+def reset_terminated(states, terminated, pos_ref, vel_ref, acc_ref):
     if not terminated.any():
         return states
-
     idx = terminated.nonzero(as_tuple=True)[0]
-
     states[idx, 0:3]   = pos_ref[idx].detach()
     states[idx, 3:6]   = vel_ref[idx].detach()
     states[idx, 6:10]  = acc_to_quat(acc_ref[idx].detach())
     states[idx, 10:13] = 0.0
-
+    states[idx, 13:17] = 0.0
     return states
 
 
-# ==============================================================
-# Observation & loss
-# ==============================================================
+def get_observation(states, pos_ref, vel_ref, acc_ref):
 
-def get_observation(
-    states:  Tensor,
-    pos_ref: Tensor,   # (N, 3)
-    vel_ref: Tensor,   # (N, 3)
-    acc_ref: Tensor,   # (N, 3)
-) -> Tensor:
-    p = states[:, 0:3]
-    v = states[:, 3:6]
-    q = states[:, 6:10]
-    w = states[:, 10:13]
-
-    p_error = pos_ref - p
-    v_error = vel_ref - v
-
-    return torch.cat([p_error, v_error, acc_ref, q, w], dim=-1)    # (N, 16)
+    return torch.cat([
+        pos_ref - states[:, 0:3],   # position error  (N, 3)
+        vel_ref - states[:, 3:6],   # velocity error  (N, 3)
+        acc_ref,                    # reference acc   (N, 3)
+        # states[:, 6:10],            # quaternion      (N, 4)
+        quat_to_rotmat(states[:, 6:10]).reshape(states.shape[0], 9),            # quaternion      (N, 4)
+        states[:, 10:13],           # body rates      (N, 3)
+    ], dim=-1)                      # (N, 16)
 
 
-def compute_loss(
-    states:  Tensor,
-    pos_ref: Tensor,
-    vel_ref: Tensor,
-    acc_ref: Tensor,
-    weights: DictConfig,
-    mask:    Tensor | None = None,
-) -> Tensor:
+def compute_loss(states, pos_ref, vel_ref, acc_ref, weights, mask=None):
     if mask is not None and not mask.any():
         return states.sum() * 0.0
 
-    s = states[mask] if mask is not None else states
-    p = pos_ref[mask] if mask is not None else pos_ref
-    v = vel_ref[mask] if mask is not None else vel_ref
-    a = acc_ref[mask] if mask is not None else acc_ref
+    s, p, v, a = (x[mask] if mask is not None else x
+                  for x in (states, pos_ref, vel_ref, acc_ref))
 
     pos_loss  = torch.linalg.norm(p - s[:, 0:3], dim=-1).mean()
     vel_loss  = torch.linalg.norm(v - s[:, 3:6], dim=-1).mean()
     rate_loss = (s[:, 10:13] ** 2).sum(dim=-1).mean()
 
-    gravity    = torch.tensor([0.0, 0.0, -9.81], device=s.device)
+    from utils.math import quat_to_rotmat
+    gravity    = torch.tensor([0., 0., -9.81], device=s.device)
     thrust_dir = torch.nn.functional.normalize(a + gravity, dim=-1)
-    R          = quat_to_rotmat(s[:, 6:10])
-    body_z     = R[:, :, 2]
-    cos_angle  = (body_z * thrust_dir).sum(dim=-1).clamp(-1, 1)
-    att_loss   = (1.0 - cos_angle).mean()
+    body_z     = quat_to_rotmat(s[:, 6:10])[:, :, 2]
+    att_loss   = (1.0 - (body_z * thrust_dir).sum(dim=-1).clamp(-1, 1)).mean()
 
-    return (
-        weights.pos        * pos_loss  +
-        weights.vel        * vel_loss  +
-        weights.att        * att_loss  +
-        weights.body_rates * rate_loss
-    )
+    return (weights.pos * pos_loss + weights.vel * vel_loss +
+            weights.att * att_loss + weights.body_rates * rate_loss)
 
+def build_controller(cm_type, quadrotor, cfg):
+    alloc = DirectAllocation(quadrotor._alloc_matrix)
+    # TODO: ideally most of the params should be gotten from quadrotor object
+    if cm_type == "srt":
+        return SRT(
+            mass=quadrotor.m,
+            max_TWR=quadrotor.max_TWR,
+        )
+    elif cm_type == "ctbr":
+        return CTBR(
+            allocator=alloc,
+            mass=quadrotor.m,
+            max_TWR=quadrotor.max_TWR,
+            J=quadrotor.J,
+            max_rate=cfg.env.w_max,
+            kp_rate=cfg.env.kp_rate,
+            dt=cfg.dt
+        )
+    elif cm_type in ("lvhr", "lvhr+g"):
+        return LVHR(
+            allocator=alloc,
+            m=quadrotor.m,
+            J=quadrotor.J,
+            g=quadrotor.g,
+        )
 
-# ==============================================================
-# Renderer helper
-# ==============================================================
-
-def _build_racing_renderer(
-    cfg:               DictConfig,
-    traj:              Tensor,          # (steps, 20)
-    randomized_params: QuadrotorParams,
-    dt:                float,
-    ref_trajectory=None,                # (steps, 3) numpy or None
-) -> RacingRenderer:
-    gates_position, gates_rpy = load_gates_from_yaml(
-        "/home/adame/torchAirBender/miscellaneous/race_tracks/uzh_7g_moved.yaml"
-    )
-    return RacingRenderer(
-        gates_position=gates_position,
-        gates_rpy=gates_rpy,
-        gate_mesh_path="/home/adame/torchAirBender/miscellaneous/gate.obj",
-        gate_scale=1.0,
-        gate_color=(0.25, 0.0, 0.5),
-        ref_trajectory=ref_trajectory,
-        trajectory=traj[:, :17].cpu().numpy(),
-        arm_length=float(randomized_params.arm_length[0].cpu()),
-        arm_angle=float(randomized_params.arm_angle[0].cpu()),
-        mass=float(randomized_params.mass[0].cpu()),
-        dt=dt,
-    )
-
-
-# ==============================================================
-# Train
-# ==============================================================
-
+    elif cm_type == "lvyr-indi":
+        raise NotImplementedError("INDI inner loop not yet implemented")
+    else:
+        raise ValueError(f"Unknown control mode: {cm_type}")
+    
 def train(cfg: DictConfig):
-    start      = time.time()
-    output_dir = "/home/adame/torchAirBender/outputs/policies/racing"
-    os.makedirs(output_dir, exist_ok=True)
+    start    = time.time()
+    dt, device, num_envs, cm = cfg.dt, cfg.device, cfg.num_envs, cfg.cm
 
-    dt         = cfg.dt
-    device     = cfg.device
-    num_envs   = cfg.num_envs
-    episodes   = cfg.episodes
-    steps      = cfg.steps
-    truncation = cfg.truncation
+    print(f"\n{'='*85}")
+    print(f" {'-'*26}  Training Trajectory Tracking  {'-'*26} ")
+    print(f"  Control Mode: {cm}  |  Envs: {num_envs}  |  Episodes: {cfg.episodes}  |  Steps: {cfg.steps}  |  Horizon: {cfg.truncation}")
+    print(f"{'='*85}\n")
 
-    print(f"\n{'='*75}")
-    print(f"  Racing Training")
-    print(f"  Envs: {num_envs}  |  Episodes: {episodes}  |  Steps: {steps}  |  Horizon: {truncation}")
-    print(f"{'='*75}\n")
+    out_dir  = f"/home/adame/torchAirBender/outputs/policies/TT/{cm}"
+    os.makedirs(out_dir, exist_ok=True)
 
-    truncation_losses = torch.empty(truncation, device=device)
-    traj_env0         = torch.empty((steps, 20), device=device)    # 13 state + 4 actions + 3 ref pos
+    export_dir = "/home/adame/torchAirBender/outputs/policies/TT/ctbr/exported_data"
+    os.makedirs(export_dir, exist_ok=True)
+    csv_path = os.path.join(export_dir, "training_metrics.csv")
 
-    quadrotor = QuadrotorDynamics(cfg)
-    policy = MLP(
-        layer_sizes=cfg.env.nn,
-        activation=nn.ReLU,
-        output_activation=nn.Sigmoid(),
-        output_bias_init=0.0,
-    ).to(device)
-    policy.load_state_dict(torch.load(
-        "/home/adame/torchAirBender/outputs/las_mejores/show2rob.pt",
-        map_location=device,
-    ))
+    quadrotor  = QuadrotorDynamics(cfg)
+    traj      = TrajectoryManager.from_harmonics(cfg.env.traj, num_envs, device)
 
-    controller = SRTController_old(cfg)
-    optimizer  = torch.optim.Adam(policy.parameters(), lr=cfg.env.lr)
+    # path = "/home/adame/torchAirBender/miscellaneous/trajectories/TOGT/togt_traj.csv"
+    # traj = TrajectoryManager.from_togt(path, cfg.num_envs, cfg.device)
 
-    best_loss = float("inf")
-    speed_scale = 0.85
+    controller = build_controller(cm, quadrotor, cfg)
+    
+    policy    = MLP(layer_sizes=list(cfg.env.policy) + [ACT_DIMS[cm]], 
+                    # activation=nn.Tanh,                           
+                    activation=nn.ReLU,                             
+                    output_activation=nn.Sigmoid(), 
+                    output_bias_init=0.0
+                    ).to(device)
+    
+    # ⚠️Load policy⚠️
+    policy.load_state_dict(torch.load("/home/adame/torchAirBender/outputs/policies/TT/ctbr/trck_1.90.pt", map_location=device))
+    
+    optimizer = torch.optim.Adam(policy.parameters(), lr=cfg.env.lr)
+    # optimizer = torch.optim.AdamW(policy.parameters(), lr=cfg.env.lr)
 
-    for ep in range(episodes):
+    traj_data = torch.empty((cfg.steps, CM_COLS[cm]), device=device)
+    last_saved_w = 1.0
+    SAVE_INTERVAL = 0.1
+    best_loss    = float("inf")
+    s = 0.3
 
-        # --- build ref trajectory for this episode ---
-        # speed_scale = max(0.4, min(0.6, 0.2 + ep * (0.8 / episodes)))
-        get_ref, _ = build_get_ref(cfg, device, dt, speed_scale=speed_scale)
-        pos0, vel0, acc0 = get_ref(0)
-        states, randomized_params = reset(cfg, pos0, vel0, acc0)
-        quadrotor.set_parameters(randomized_params)
+    # with open(csv_path, "w", newline="") as csv_file:
+    #     csv_writer = csv.writer(csv_file)
+    #     csv_writer.writerow(["Wall time", "Step", "Value"])
 
-        ep_loss     = 0.0
-        num_updates = 0
+    for ep in range(cfg.episodes):
+        traj.randomize()
 
-        for t in range(steps):
+        states, last_params = reset(cfg, traj, quadrotor, controller)
 
-            if t % truncation == 0:
-                states          = states.detach()
-                window_start    = t
-                window_loss_sum = torch.zeros(1, device=device)
+        ep_loss, num_updates  = 0.0, 0
+        sq_error_sum          = torch.zeros(1, device=device)
+        num_samples           = 0
+        window_loss           = torch.zeros(1, device=device)
+        window_start          = 0
 
-            pos_ref, vel_ref, acc_ref = get_ref(t)
+        for t in range(cfg.steps):
+            if t % cfg.truncation == 0:
+                states       = states.detach()
+                window_start = t
+                window_loss  = torch.zeros(1, device=device)
+
+            pos_ref, vel_ref, acc_ref, _ = traj.get_reference(t, speed_scale=s)
 
             obs     = get_observation(states, pos_ref, vel_ref, acc_ref)
             raw     = policy(obs)
-            actions = controller(raw)
-            states  = quadrotor.step(state=states, action=actions)
+
+            if cm == "lvhr+g":
+                actions = controller(states, raw[:, 0:4], gains=raw[:, 4:7])
+            else:
+                actions = controller(states, raw)
+
+            states  = quadrotor.step(states, actions[:, 0:4])            # Forward pass through the dynamics
 
             dist    = torch.linalg.norm(pos_ref - states[:, 0:3], dim=-1)
             too_far = dist > cfg.env.max_dist_to_target
-            alive   = ~too_far
 
-            step_loss = compute_loss(
-                states, pos_ref, vel_ref, acc_ref, cfg.env.loss_weights, mask=alive
-            )
+            sq_error_sum += (dist ** 2).sum()
+            num_samples  += dist.numel()
 
-            # Maybe remove idk
-            if too_far.any():
-                termination_penalty = too_far.float() * cfg.env.termination_penalty
-                step_loss = step_loss + termination_penalty.mean()
+            window_loss += compute_loss(states, pos_ref, vel_ref, acc_ref, cfg.env.loss_weights, mask=~too_far)
 
-            truncation_losses[t % truncation] = step_loss.detach()
-            window_loss_sum = window_loss_sum + step_loss
+            if ep == cfg.episodes - 1:
+                traj_data[t] = torch.cat([
+                    states[0].detach(),       # 0:17  — full state
+                    pos_ref[0].detach(),      # 17:20 — p_ref
+                    vel_ref[0].detach(),      # 20:23 — v_ref
+                    acc_ref[0].detach(),      # 23:26 — a_ref
+                    actions[0].detach(),      # 26:N  — srt + (wrench + lvyr + gains)
+                ], dim=0)
 
-            if ep == episodes - 1:
-                traj_env0[t] = torch.cat(
-                    [states[0].detach(), actions[0].detach(), pos_ref[0].detach()],
-                    dim=0,
-                )
-
-            if (t + 1) % truncation == 0 or (t + 1) == steps:
-                window_len = (t + 1) - window_start
-                loss = window_loss_sum / window_len
+            if (t + 1) % cfg.truncation == 0 or (t + 1) == cfg.steps:
+                loss = window_loss / ((t + 1) - window_start)
                 optimizer.zero_grad()
                 loss.backward()
                 optimizer.step()
-                ep_loss     += truncation_losses[:window_len].mean().item()
+                ep_loss     += loss.item()
                 num_updates += 1
 
             states = reset_terminated(states, too_far, pos_ref, vel_ref, acc_ref)
 
-        avg_ep_loss = ep_loss / num_updates
-        if avg_ep_loss < 1.5:
-            print(f"Increasing speed scale by 0.025 🔥🔥")
-            torch.save(policy.state_dict(), os.path.join(output_dir, f"racing_at_{speed_scale:.2f}.pt"))
-            speed_scale += 0.01
+        avg_loss = ep_loss / max(num_updates, 1)
+        rmse     = torch.sqrt(sq_error_sum / num_samples).item()
+        print(f"  Episode {ep+1:>4}/{cfg.episodes}  |  Loss: {avg_loss:.4f}  |  RMSE: {rmse:.3f} m")
 
-        print(f"  Episode {ep+1:>4}/{episodes}  |  Avg Loss: {avg_ep_loss:.4f}")
-        print(f"   - Speed scale is: {speed_scale:.2f}")
+        # wall_time = time.time() - start
+        # total_steps = (ep + 1) * cfg.steps * num_envs
+        # csv_writer.writerow([f"{wall_time:.2f}", total_steps, float(avg_loss)])
+        # csv_file.flush()
 
-        if avg_ep_loss < best_loss:
-            best_loss = avg_ep_loss
-            torch.save(policy.state_dict(), os.path.join(output_dir, "racing_best.pt"))
+        if rmse < cfg.env.rmse_threshold:
+            print(f"  >> RMSE threshold reached, s: {cfg.env.traj.w:.2f} → {cfg.env.traj.w + cfg.env.w_increase:.2f} 🔥")
+            # print(f"  >> RMSE threshold reached, s: {s:.2f} → {s + cfg.env.w_increase:.2f} 🔥")
+            cfg.env.traj.w += cfg.env.w_increase
+            # s += cfg.env.w_increase
 
-    print(f"Total training time: {time.time() - start:.2f}s")
-    torch.save(policy.state_dict(), os.path.join(output_dir, "racing_final.pt"))
+            if cfg.env.traj.w >= last_saved_w + SAVE_INTERVAL:
+                torch.save(policy.state_dict(), os.path.join(out_dir, f"uzh_{cfg.env.traj.w:.2f}.pt"))
+                last_saved_w = cfg.env.traj.w
 
-    renderer = _build_racing_renderer(
-        cfg, traj_env0, randomized_params, dt,
-        ref_trajectory=traj_env0[:, 17:20].cpu().numpy(),
+
+        # if avg_loss < best_loss:
+        #     best_loss = avg_loss
+        #     torch.save(policy.state_dict(), os.path.join(out_dir, "trck_best.pt"))
+
+    torch.save(policy.state_dict(), os.path.join(out_dir, "uzh_final.pt"))
+    torch.jit.script(policy.cpu()).save(os.path.join(out_dir, "uzh_final_scripted.pt"))
+    print(f"\nTotal training time: {time.time() - start:.1f}s")
+    
+    traj_np = traj_data.cpu().numpy()
+    # ---- Plot ------
+    plot_rollout(
+        traj_np        = traj_np,
+        dt             = cfg.dt,
+        label          = cfg.cm,
+        arm_length = float(quadrotor.arm_length[0, 0].cpu()),
+        arm_angle  = float(quadrotor.arm_angle[0].cpu()) * 180 / 3.14,
+        mass       = float(quadrotor.m[0].cpu()),
+        # save_path = f"/home/adame/torchAirBender/outputs/plots/{cm}_dashboard.png",  # uncomment to save instead of show
     )
-    renderer.run()
+    # ---- Render ------
+    MultiDroneRenderer(trajectory=traj_np, ref_trajectory=traj_np[:, 17:20]).run()
 
 
-# ==============================================================
-# Test
-# ==============================================================
+# ==================================================================
+#                    TESTING THE POLICIES
+# ==================================================================
 
 def test(cfg: DictConfig):
-    policy_path = "/home/adame/torchAirBender/outputs/las_mejores/racing/racing_at_0.87.pt"
-    dt     = cfg.dt
-    device = cfg.device
-    steps  = cfg.steps
+    policies = [
+        {"type": "bptt",
+         "cm": "srt", 
+         "path": "/home/adame/torchAirBender/outputs/policies/TT/srt/trck_1.80.pt",  
+         "color": (0.2, 0.6, 1.0)},
+        {"type": "bptt",
+         "cm": "ctbr", 
+         "path": "/home/adame/torchAirBender/outputs/policies/TT/ctbr/trck_1.90.pt",  
+         "color": (0.2, 0.6, 1.0)},
+        {"type": "bptt",
+         "cm": "lvhr", 
+         "path": "/home/adame/torchAirBender/outputs/policies/TT/lvhr/trck_1.80.pt",  
+         "color": (0.2, 0.6, 1.0)},
 
-    # single env
-    cfg_dict              = OmegaConf.to_container(cfg, resolve=True)
-    cfg_dict["num_envs"]  = 1
-    cfg                   = OmegaConf.create(cfg_dict)
+        # {"type": "ppo",
+        #  "cm": "ctbr",
+        #  "path": "/home/adame/torchAirBender/outputs/policies/PPO/tt_ctbr_results.zip",
+        # "color": (1.0, 0.55, 0.0)},
+    ]
+    for p in policies:
+        p["label"] = p["type"] + "_" + p["cm"] + "_" + Path(p["path"]).stem.split("_", 1)[-1]
 
-    # load policy
-    policy = MLP(
-        layer_sizes=cfg.env.nn,
-        activation=nn.ReLU,
-        output_activation=nn.Sigmoid(),
-        output_bias_init=0.0,
-    ).to(device)
-    policy.load_state_dict(torch.load(policy_path, map_location=device))
-    policy.eval()
-    print(f"Loaded policy from: {policy_path}")
+    randomize = True
+    seed      = None
+    save      = False
+    csv_path  = "/home/adame/torchAirBender/miscellaneous/trajectories/CAMP/harmonic.csv"
 
-    # build ref callable
-    get_ref, _ = build_get_ref(cfg, device, dt, speed_scale=0.87)
+    if seed is not None:
+        torch.manual_seed(seed)
 
-    # init
-    controller        = SRTController_old(cfg)
-    pos0, vel0, acc0  = get_ref(0)
-    states, randomized_params = reset(cfg, pos0, vel0, acc0)
-
+    device    = cfg.device
     quadrotor = QuadrotorDynamics(cfg)
-    quadrotor.set_parameters(randomized_params)
+    traj      = TrajectoryManager.from_harmonics(cfg.env.traj, cfg.num_envs, device)
 
-    traj = torch.empty((steps, 20), device=device)
+    ref_traj = None
+    drones   = []
+    params   = None
 
-    print(f"\n{'='*60}")
-    print(" Testing Racing ")
-    print(f"{'='*60}\n")
+    for spec in policies:
+        print(f"\n  Rolling out: {spec['label']}  ({spec['path']})")
 
-    total_loss   = 0.0
-    sq_error_sum = 0.0
+        controller = build_controller(spec["cm"], quadrotor, cfg)
 
-    with torch.inference_mode():
-        for t in range(steps):
+        # ── Load policy ──────────────────────────────────────────────────
+        if spec["type"] == "ppo":
+            from stable_baselines3 import PPO as SB3PPO
+            sb3_model = SB3PPO.load(spec["path"], device=device)
+            def get_action(obs):
+                # obs: (N, 16) tensor → numpy → predict → tensor
+                action_np, _ = sb3_model.predict(
+                    obs.cpu().numpy(), deterministic=True
+                )
+                return torch.tensor(action_np, device=device, dtype=torch.float32)
 
-            pos_ref, vel_ref, acc_ref = get_ref(t)
+        else:  # bptt
+            policy = MLP(
+                layer_sizes       = list(cfg.env.policy) + [ACT_DIMS[spec["cm"]]],
+                activation        = nn.ReLU,
+                output_activation = nn.Sigmoid(),
+                output_bias_init  = 0.0,
+            ).to(device)
+            policy.load_state_dict(torch.load(spec["path"], map_location=device))
+            policy.eval()
+            def get_action(obs):
+                return policy(obs)
 
-            obs     = get_observation(states, pos_ref, vel_ref, acc_ref)
-            raw     = policy(obs)
-            actions = controller(raw)
-            states  = quadrotor.step(state=states, action=actions)
+        # ── Randomize dynamics ───────────────────────────────────────────
+        if randomize:
+            params = randomize_parameters(cfg.dynamics, cfg.num_envs, device)
+            quadrotor.set_parameters(params)
+            controller.update_params(
+                alloc_matrix = quadrotor._alloc_matrix,
+                J            = quadrotor.J,
+            )
 
-            dist    = torch.linalg.norm(pos_ref - states[:, 0:3], dim=-1)
-            too_far = dist > cfg.env.max_dist_to_target
+        # ── Reset state at trajectory start ─────────────────────────────
+        pos0, vel0, acc0, _ = traj.get_reference(0)
+        states = torch.zeros((cfg.num_envs, 17), device=device)
+        states[:, 0:3]  = pos0.detach()
+        states[:, 3:6]  = vel0.detach()
+        states[:, 6:10] = acc_to_quat(acc0.detach())
 
-            sq_error_sum += (dist ** 2).item()
+        traj_data = torch.empty((cfg.steps, CM_COLS[spec["cm"]]), device=device)
 
-            step_loss   = compute_loss(states, pos_ref, vel_ref, acc_ref, cfg.env.loss_weights)
-            total_loss += step_loss.item()
+        # ── Rollout ──────────────────────────────────────────────────────
+        with torch.no_grad():
+            for t in range(cfg.steps):
+                pos_ref, vel_ref, acc_ref, _ = traj.get_reference(t)
+                obs     = get_observation(states, pos_ref, vel_ref, acc_ref)
+                raw     = get_action(obs)
+                actions = controller(states, raw)
+                states  = quadrotor.step(states, actions[:, 0:4])
 
-            traj[t] = torch.cat([states[0], actions[0], pos_ref[0]], dim=0)
+                dist    = torch.linalg.norm(pos_ref - states[:, 0:3], dim=-1)
+                too_far = dist > cfg.env.max_dist_to_target
 
-            if too_far[0]:
-                print(f"  !! Terminated at step {t+1} — dist: {dist[0]:.3f}")
+                traj_data[t] = torch.cat([
+                    states[0].detach(),     # 0:17  — full state
+                    pos_ref[0].detach(),    # 17:20 — p_ref
+                    vel_ref[0].detach(),    # 20:23 — v_ref
+                    acc_ref[0].detach(),    # 23:26 — a_ref
+                    actions[0].detach(),    # 26:N  — motor thrusts + wrench
+                ], dim=0)
+
                 states = reset_terminated(states, too_far, pos_ref, vel_ref, acc_ref)
 
-    print(f"\n  Avg Loss : {total_loss / steps:.4f}")
-    print(f"  RMSE Pos : {(sq_error_sum / steps) ** 0.5:.4f} m")
+        traj_np = traj_data.cpu().numpy()
 
-    print(f"Max thrust per motor: {actions.max():.3f}")
-    print(f"Min thrust per motor: {actions.min():.3f}")
-    print(f"Max velocity reached: {traj[:, 3:6].norm(dim=-1).max():.3f} m/s")
-    print(f"Max ref velocity:     {traj[:, 17:20].diff(dim=0).norm(dim=-1).max() / dt:.3f} m/s")
+        # ── Optionally save reference CSV ────────────────────────────────
+        if ref_traj is None and save:
+            os.makedirs(os.path.dirname(csv_path), exist_ok=True)
+            ref_data = traj_np[:, 17:26]  # [px,py,pz,vx,vy,vz,ax,ay,az]
+            with open(csv_path, "w", newline="") as f:
+                writer = csv.writer(f)
+                writer.writerow(["time", "px", "py", "pz", "vx", "vy", "vz", "ax", "ay", "az"])
+                for i, row in enumerate(ref_data):
+                    writer.writerow([i * cfg.dt, *row.tolist()])
+            print(f"  Saved reference CSV: {csv_path}")
 
-    renderer = _build_racing_renderer(
-        cfg, traj, randomized_params, dt,
-        ref_trajectory=traj[:, 17:20].cpu().numpy(),
-    )
-    renderer.run()
+        ref_traj = ref_traj if ref_traj is not None else traj_np[:, 17:20]
 
-    import matplotlib.pyplot as plt
-    import numpy as np
+        drones.append({
+            "traj":  traj_np,
+            "color": spec.get("color", (0.2, 0.6, 1.0)),
+            "label": spec["label"],
+        })
 
-    # convert to cpu numpy
-    traj_np = traj.cpu().numpy()
+        # ── Plot dashboard ───────────────────────────────────────────────
+        plot_rollout(
+            traj_np    = traj_np,
+            dt         = cfg.dt,
+            label      = spec["label"],
+            arm_length = float(params.arm_length[0, 0].cpu()),
+            arm_angle  = float(params.arm_angle[0].cpu()),
+            mass       = float(params.mass[0].cpu()),
+        )
 
-    actions = traj_np[:, 13:17]  # 4 motors
-    time = np.arange(steps) * dt
-
-    plt.figure(figsize=(10,5))
-
-    plt.plot(time, actions[:,0], label="motor 1")
-    plt.plot(time, actions[:,1], label="motor 2")
-    plt.plot(time, actions[:,2], label="motor 3")
-    plt.plot(time, actions[:,3], label="motor 4")
-
-    plt.xlabel("Time [s]")
-    plt.ylabel("Motor command")
-    plt.title("Quadrotor Actions Over Rollout")
-    plt.legend()
-    plt.grid(True)
-
-    plt.show()
+    # ── Render all drones together ───────────────────────────────────────
+    MultiDroneRenderer(drones=drones, ref_trajectory=ref_traj).run()

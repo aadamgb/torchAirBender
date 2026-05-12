@@ -1,12 +1,12 @@
 from stable_baselines3.common.vec_env import VecEnv
-from env_gym.trajectory_tracking import TrajTrckEnv
+from env_gym.racing import QuadrotorEnv
 
 class TorchVecEnv(VecEnv):
     """
     Thin shim that makes TrajTrckEnv look like an SB3 VecEnv.
     The actual parallelism happens on GPU inside TrajTrckEnv.
     """
-    def __init__(self, env: TrajTrckEnv):
+    def __init__(self, env: QuadrotorEnv):
         self.metadata = {"render_modes": ["human"]}
         self.env = env
         super().__init__(
@@ -36,28 +36,6 @@ class TorchVecEnv(VecEnv):
     def step_async(self, actions):
         self._actions = actions
 
-    # def step_wait(self):
-    #     obs, reward, terminated, truncated, info = self.env.step(self._actions)
-    #     done = terminated | truncated
-
-    #     infos = []
-    #     for i in range(self.num_envs):
-    #         d = {
-    #             "pos_err": info[i]["pos_err"],
-    #             "vel_err": info[i]["vel_err"],
-    #         }
-    #         if terminated[i] or truncated[i]:
-    #             d["terminal_observation"] = obs[i]
-    #             # SB3 logs anything inside "episode" key automatically
-    #             d["episode"] = {
-    #                 "r": reward[i],           # episode reward
-    #                 "l": self.env.t,          # episode length
-    #                 "pos_err": info[i]["pos_err"],
-    #                 "vel_err": info[i]["vel_err"],
-    #             }
-    #         infos.append(d)
-
-    #     return obs, reward, done, infos
     def step_wait(self):
         obs, reward, terminated, truncated, info = self.env.step(self._actions)
         done = terminated | truncated

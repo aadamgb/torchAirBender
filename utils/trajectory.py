@@ -246,3 +246,39 @@ class CircularTrajectory:
         jerk = torch.zeros((self.num_envs, 3), device=self.device)
 
         return pos, vel, acc, jerk
+
+
+class LemniscataTrajectory:
+    """Lemniscata (Gerono) trajectory in the XY plane."""
+    def __init__(self, num_envs, device, scale=2.0, speed=1.0, height=1.5, dt=0.01):
+        self.num_envs = num_envs
+        self.device = device
+        self.scale = scale
+        self.speed = speed
+        self.height = height
+        self.dt = dt
+        self.omega = speed / max(scale, 1e-6)
+
+    def get_reference(self, t: int):
+        theta = self.omega * t * self.dt
+
+        # Position (figure-eight / lemniscata di Gerono), flipped w.r.t. y-axis
+        px = -self.scale * math.sin(theta) * math.cos(theta)
+        py = -self.scale * math.cos(theta)
+        pz = self.height
+        pos = torch.tensor([[px, py, pz]], device=self.device).expand(self.num_envs, -1)
+
+        # Velocity (analytical derivative)
+        vx = -self.scale * self.omega * math.cos(2.0 * theta)
+        vy = self.scale * self.omega * math.sin(theta)
+        vz = 0.0
+        vel = torch.tensor([[vx, vy, vz]], device=self.device).expand(self.num_envs, -1)
+
+        # Acceleration (analytical second derivative)
+        ax = 2.0 * self.scale * (self.omega ** 2) * math.sin(2.0 * theta)
+        ay = self.scale * (self.omega ** 2) * math.cos(theta)
+        az = 0.0
+        acc = torch.tensor([[ax, ay, az]], device=self.device).expand(self.num_envs, -1)
+
+        jerk = torch.zeros((self.num_envs, 3), device=self.device)
+        return pos, vel, acc, jerk

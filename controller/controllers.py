@@ -84,7 +84,9 @@ class CTBR_TEST:
     def __call__(self, state, raw):
         w = state[:, 10:13]
         # Fz    =  raw[:, 0:1] * (self.max_total_thrust - self.min_thrust) + self.min_thrust
-        Fz    =  raw[:, 0:1] # SUPERCARFEWUL WIH THIS; PUT IT BACk ❌⚠️❌💥❌⚠️
+        Fz    =  raw[:, 0:1]  # SUPERCARFEWUL WIH THIS; PUT IT BACk ❌⚠️❌💥❌⚠️
+        # Fz    =  ((raw[:, 0:1]) / 0.26) ** 2 * 4
+        # print(Fz)
         # w_des = (raw[:, 1:4] * 2.0 - 1.0) * self.max_rate
         w_des = raw[:, 1:4] # SUPERCARFEWUL WIH THIS; PUT IT BACk ❌⚠️❌💥❌⚠️
         tau = self.J * (self.kp_rate * (w_des - w) / self.dt)  # (N, 3)
@@ -105,7 +107,7 @@ class CTBR_TEST:
             self.min_thrust = min_thrust * 4.0  
 
 
-class LVYR:
+class LVHR:
     """
     Linear Velocity + Yaw Rate controller.
     
@@ -116,10 +118,10 @@ class LVYR:
         self,
         allocator,
         m, J, g, 
-        kv=1.0, kR=2.0, kw=0.15,   # TODO: Hardcoded for now...
-        max_vel=5.0,
-        max_yaw_rate=2.0,
-        gain_scale = [1.0, 1.0, 0.15]   # Only for gain scheduling TODO: Hardcoded for now...
+        kv=0.5, kR=0.15, kw=0.05,   # TODO: Hardcoded for now...
+        max_vel=20.0,
+        max_yaw_rate=4.0,
+        gain_scale = [0.5, 0.15, 0.05]   # Only for gain scheduling TODO: Hardcoded for now...
     ):
         self.allocator    = allocator   
         self.m            = m

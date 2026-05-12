@@ -1,0 +1,28 @@
+name: racing
+abbr: racing_ppo
+
+hidden_layers: [128, 128, 128]
+lr: 1e-4
+
+pos_progress: 10000.0            # dense gate-proximity penalty scale
+vel_progress: 100000.0            # dense gate-proximity penalty scale
+w_rate: 1.0           # body-rate regularisation scale
+r_success: 200000.           # bonus for clean gate pass
+r_miss: 1000000.0               # penalty for crossing gate plane but missing the hole
+
+r_terminate: 1000000.0
+# r_survival: 0.01
+
+max_dist_to_gate: 15.0
+
+kp_rate: 0.2
+w_max: 5.0
+
+ppo:
+  # n_steps: 800
+  # batch_size: 64
+  gamma: 0.99
+  total_timesteps: 10_000_000
+
+
+track: "/home/adame/torchAirBender/miscellaneous/race_tracks/fig8.yaml"

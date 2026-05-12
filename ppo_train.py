@@ -1,18 +1,25 @@
 import hydra
+import importlib
 import numpy as np
 import torch
 from omegaconf import DictConfig
 from stable_baselines3 import PPO
+from stable_baselines3.common.vec_env import VecNormalize
 
-from env_gym.trajectory_tracking import TrajTrckEnv
 from env_gym.wrappers import TorchVecEnv
 from env_gym.callbacks import TrajTrackingCallback
 
 
 @hydra.main(version_base=None, config_path="cfg", config_name="config")
 def main(cfg: DictConfig):
-    env     = TrajTrckEnv(cfg, render_mode="human")
-    vec_env = TorchVecEnv(env)
+    try:
+        environment = importlib.import_module(f"env_gym.{cfg.env.name}")
+    except ImportError:
+        print(f"Error: Env '{cfg.env.name}' not found in env_gym/ folder.")
+        return
+    
+    env     = environment.QuadrotorEnv(cfg, render_mode="human")
+    vec_env = VecNormalize(TorchVecEnv(env), norm_obs=True, norm_reward=True)    
 
     model = PPO(
         policy          = "MlpPolicy",
@@ -20,10 +27,12 @@ def main(cfg: DictConfig):
             net_arch  = cfg.env.hidden_layers,  
             activation_fn = torch.nn.ReLU),
         env             = vec_env,
-        n_steps         = cfg.steps,
-        batch_size      = cfg.num_envs,
+        # n_steps         = cfg.steps,
+        n_steps         = 64,
+        batch_size      = 1024,
         learning_rate   = cfg.env.lr,
-        gamma           = cfg.env.ppo.gamma,
+        n_epochs=4,
+        gamma=0.999,
         verbose         = 1,
         tensorboard_log = "/home/adame/torchAirBender/outputs/policies/PPO/tb_logs",
     )

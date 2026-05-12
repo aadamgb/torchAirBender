@@ -10,5 +10,5 @@ class TrajTrackingCallback(BaseCallback):
         env = self.training_env.env  # access the underlying QuadTrajEnv
         self.logger.record("analysis/reward_mean", env.reward_mean)
         self.logger.record("analysis/pos_mse", env.pos_mse_mean)
-        self.logger.record("analysis/vel_mse", env.vel_mse_mean)
+        # self.logger.record("analysis/vel_mse", env.vel_mse_mean)
         return True

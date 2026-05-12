@@ -1,0 +1,57 @@
+name: gates
+abbr: gates
+
+policy: [16, 128, 128]   # only input and hidden layers
+
+lr: 1e-3
+
+loss_weights:
+  pos: 2.0
+  vel: 1.0
+  att: 0.2
+  body_rates: 0.2
+
+
+traj:
+  num_harmonics: 3  # must be integer
+  z_offset: 3.0
+  A: 1.0
+  w: 1.0
+  phi: 2.0
+  dt: 0.01
+
+max_dist_to_target: 2.0
+rmse_threshold: 0.15
+
+
+w_increase: 0.1
+
+# # For the CTBR controller
+kp_rate: 0.2
+# kp_rate: 1.0
+w_max: 5.0
+
+
+# name: gates
+# abbr: gates
+
+# # Policy architecture (input=16, matches get_observation output)
+# policy: [16, 128, 128]
+
+# lr: 1e-3
+
+# # CTBR controller params
+# kp_rate: 0.2
+# w_max: 5.0
+
+# # Gate file
+# gates_yaml: "/home/adame/torchAirBender/miscellaneous/race_tracks/fig8.yaml"
+
+# # Termination
+# max_dist_to_gate: 5.0     # [m]  — from gate centroid
+
+# # Reward weights
+# w_proximity: 5         # dense gate-proximity penalty scale
+# w_rate: 0.001             # body-rate regularisation scale
+# r_success: 10.0           # bonus for clean gate pass
+# r_miss: 5.0               # penalty for crossing gate plane but missing the hole

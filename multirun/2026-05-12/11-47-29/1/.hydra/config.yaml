@@ -1,0 +1,79 @@
+env:
+  name: trajectory_tracking
+  abbr: tt
+  policy:
+  - 21
+  - 128
+  - 128
+  lr: 0.001
+  loss_weights:
+    pos: 2.0
+    vel: 1.0
+    att: 0.2
+    body_rates: 0.2
+  traj:
+    num_harmonics: 3
+    z_offset: 3.0
+    A: 1.0
+    w: 1.5
+    phi: 2.0
+    dt: 0.01
+  max_dist_to_target: 5.0
+  rmse_threshold: 0.15
+  w_increase: 0.0
+  kp_rate: 0.2
+  w_max: 5.0
+dynamics:
+  name: quadrotor
+  sf:
+    nominal: 0.5
+    min: 0.45
+    max: 0.55
+  nf: 0.05
+  arm_length:
+    nominal: 0.15
+    min: 0.1
+    max: 0.2
+  arm_angle:
+    nominal: 45.0
+  mass:
+    nominal: 1.21
+    min: 0.8
+    max: 1.8
+  inertia:
+    xx:
+      nominal: 0.007
+      min: 0.0009
+      max: 0.014
+    yy:
+      nominal: 0.007
+      min: 0.0009
+      max: 0.014
+    zz:
+      nominal: 0.013
+      min: 0.009
+      max: 0.017
+  km:
+    nominal: 0.012
+    min: 0.008
+    max: 0.02
+  a0:
+    nominal: 4.5e-08
+    min: 4.4e-08
+    max: 4.6e-08
+  motor_tau:
+    nominal: 0.05
+    min: 0.045
+    max: 0.055
+  max_TWR: 6.9
+val:
+  name: body_rates
+  kp_rate: 1.0
+  w_max: 5.0
+cm: lvhr
+device: cuda
+dt: 0.01
+num_envs: 1000
+episodes: 50
+steps: 1000
+truncation: 50

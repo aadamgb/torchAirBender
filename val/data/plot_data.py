@@ -19,15 +19,36 @@ from pathlib import Path
 # BAG_PATH  = "/home/adame/torchAirBender/val/data/gazebo/wx_sin-A0-6.bag"
 
 # wx chirp
-START_SEC = 85
+# START_SEC = 85
+# END_SEC   = START_SEC + 8
+# TRAJ_PATH = "/home/adame/torchAirBender/val/data/airbndr/wx_chirp.npy"
+# BAG_PATH  = "/home/adame/torchAirBender/val/data/gazebo/wx_chirp.bag"
+
+# wz step
+# START_SEC = 16.05
+# END_SEC   = START_SEC + 8
+# TRAJ_PATH = "/home/adame/torchAirBender/val/data/airbndr/wz_step.npy"
+# BAG_PATH  = "/home/adame/torchAirBender/val/data/gazebo/wz_step.bag"
+
+# wz amp
+# START_SEC = 99.55
+# END_SEC   = START_SEC + 8
+# TRAJ_PATH = "/home/adame/torchAirBender/val/data/airbndr/wz_amp.npy"
+# BAG_PATH  = "/home/adame/torchAirBender/val/data/gazebo/wz_amp.bag"
+
+# wz freq
+START_SEC = 20.6
 END_SEC   = START_SEC + 8
-TRAJ_PATH = "/home/adame/torchAirBender/val/data/airbndr/wx_chirp.npy"
-BAG_PATH  = "/home/adame/torchAirBender/val/data/gazebo/wx_chirp.bag"
+TRAJ_PATH = "/home/adame/torchAirBender/val/data/airbndr/wz_freq.npy"
+BAG_PATH  = "/home/adame/torchAirBender/val/data/gazebo/wz_freq.bag"
+
+
+
 
 DT_TORCH  = 0.01 
 
 # Indices in your traj_np array
-OMEGA_X_INDEX = 10 
+OMEGA_X_INDEX = 12 
 REF_INDEX     = -1 # Adjust this index to wherever your omega_x setpoint is
 
 # TIME_OFFSET = 85
@@ -75,7 +96,7 @@ def get_comparison_plot():
         for connection, timestamp, rawdata in reader.messages(connections=connections):
             if t_start_ns <= timestamp <= t_end_ns:
                 msg = reader.deserialize(rawdata, connection.msgtype)
-                val = msg.twist.twist.angular.x 
+                val = msg.twist.twist.angular.z 
                 odom_vals.append(val)
                 rel_time = (timestamp - bag_start_ns) / 1e9
                 odom_stamps.append(rel_time)
@@ -98,9 +119,9 @@ def get_comparison_plot():
     plt.plot(odom_stamps, odom_vals, 
              label='Gazebo', color='tab:green', lw=2)
 
-    plt.title(r"Pitch Rate Step Response")
+    plt.title(r"Yaw Rate Step Response")
     plt.xlabel("Time (s)")
-    plt.ylabel(r"$\omega_x$ (rad/s)")
+    plt.ylabel(r"$\omega_z$ (rad/s)")
     plt.xlim(START_SEC, END_SEC)
     plt.legend(loc='lower right')
     plt.grid(True, alpha=0.3)
@@ -120,24 +141,24 @@ def get_comparison_plot():
     gazebo_export = np.column_stack((t2, odom_vals))
 
     np.savetxt(
-        f'val/data/exported_csv/wx_freq_ours.csv',
+        f'val/data/exported_csv/wz_freq_ours.csv',
         ours_export,
         delimiter=',',
-        header='time,omega_x',
+        header='time,omega_z',
         comments=''
     )
     np.savetxt(
-        f'val/data/exported_csv/wx_freq_gazebo.csv',
+        f'val/data/exported_csv/wz_freq_gazebo.csv',
         gazebo_export,
         delimiter=',',
-        header='time,omega_x',
+        header='time,omega_z',
         comments=''
     )
     np.savetxt(
         f'val/data/exported_csv/ref_freq.csv',
         ref_export,
         delimiter=',',
-        header='time,omega_x',
+        header='time,omega_z',
         comments=''
     )
 

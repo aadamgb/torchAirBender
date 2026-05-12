@@ -13,7 +13,7 @@ from utils.math import acc_to_quat, quat_to_rotmat
 from utils.replay_multi import MultiDroneRenderer
 
 
-class TrajTrckEnv(gym.Env):
+class QuadrotorEnv(gym.Env):
     
     metadata = {"render_modes": ["human"]}
 
@@ -116,12 +116,12 @@ class TrajTrckEnv(gym.Env):
         vel_loss = torch.linalg.norm(vel_ref - self.states[:, 3:6], dim=-1)
         rates = (self.states[:, 10:13]**2).sum(dim=-1)
         att   = (1.0 - (body_z * thrust_dir).sum(dim=-1).clamp(-1, 1))
-        survival = torch.ones(self.num_envs, device=self.device) * 0.5
+        # survival = torch.ones(self.num_envs, device=self.device) * 0.5
 
         reward_t = -( self.cfg.env.loss_weights.pos   * pos_loss + 
                       self.cfg.env.loss_weights.vel   * vel_loss +
                       self.cfg.env.loss_weights.att   *    att +
-                      self.cfg.env.loss_weights.rates * rates) + survival
+                      self.cfg.env.loss_weights.rates * rates) #+ survival
         
         reward = reward_t.cpu().numpy().astype(np.float32)
     
@@ -137,7 +137,7 @@ class TrajTrckEnv(gym.Env):
             self.states[idx, 10:]  = 0.0
             
             # termination penalty
-            reward[terminated]    -= 5.0  
+            # reward[terminated]    -= 5.0  
             
         # --- Truncation ---
         truncated = np.full(self.num_envs, self.t >= self.max_steps, dtype=bool)
