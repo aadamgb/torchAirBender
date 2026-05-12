@@ -1,11 +1,10 @@
 name: trajectory_tracking
 abbr: tt
 
-encoder: [7, 16, 16, 3]
-policy: [16, 128, 128]   # only input and hidden layers
+# policy: [16, 128, 128]   # only input and hidden layers
+policy: [21, 128, 128]   # only input and hidden layers
 
 lr: 1e-3
-
 
 loss_weights:
   pos: 2.0
@@ -16,9 +15,9 @@ loss_weights:
 
 traj:
   num_harmonics: 3  # must be integer
-  z_offset: 0.0
+  z_offset: 3.0
   A: 1.0
-  w: 1.0
+  w: 1.5
   phi: 2.0
   dt: 0.01
 
@@ -26,9 +25,8 @@ max_dist_to_target: 5.0
 rmse_threshold: 0.15
 
 
-w_increase: 0.1
+w_increase: 0.0
 
 # # For the CTBR controller
 kp_rate: 0.2
-# kp_rate: 1.0
 w_max: 5.0

@@ -598,7 +598,9 @@ class RacingRenderer(MultiDroneRenderer):
         gates_rpy:      np.ndarray,
         gate_mesh_path: str   = '/home/adame/torchAirBender/miscellaneous/gate.obj',
         gate_scale:     float = 1.0,
+        gate_mesh_rpy_offset: tuple = (90.0, 0.0, 0.0),
         gate_color:     tuple = (0.25, 0.0, 0.5),
+        gate_axis_scale: float = 0.4,
         ref_trajectory: np.ndarray = None,
         **kwargs,
     ):
@@ -627,7 +629,8 @@ class RacingRenderer(MultiDroneRenderer):
         if isinstance(raw, trimesh.Scene):
             raw = trimesh.util.concatenate(tuple(raw.geometry.values()))
 
-        verts_body = raw.vertices.astype(np.float32) * gate_scale
+        mesh_rot   = self._rpy_deg_to_rotmat(np.array(gate_mesh_rpy_offset, dtype=np.float32))
+        verts_body = (mesh_rot @ raw.vertices.astype(np.float32).T).T * gate_scale
         faces      = raw.faces.astype(np.int32)
         V = len(verts_body)
         F = len(faces)
@@ -639,8 +642,10 @@ class RacingRenderer(MultiDroneRenderer):
             gates_rpy = np.tile(gates_rpy, (N, 1))
 
         all_verts_enu = np.zeros((N * V, 3), dtype=np.float32)
+        gate_rotmats  = np.zeros((N, 3, 3), dtype=np.float32)
         for g in range(N):
             R   = self._rpy_deg_to_rotmat(gates_rpy[g])
+            gate_rotmats[g] = R
             pos = gates_position[g]
             all_verts_enu[g * V : (g + 1) * V] = (R @ verts_body.T).T + pos
 
@@ -654,6 +659,24 @@ class RacingRenderer(MultiDroneRenderer):
         self._gate_i = ti.field(dtype=ti.i32,           shape=N * F * 3)
         self._gate_v.from_numpy(all_verts_ti)
         self._gate_i.from_numpy(all_faces.flatten())
+
+        # Local gate reference frames (X/Y/Z) at each gate origin.
+        axis_dirs = np.eye(3, dtype=np.float32) * gate_axis_scale
+        self._gate_axis_verts = [
+            ti.Vector.field(3, dtype=ti.f32, shape=N * 2) for _ in range(3)
+        ]
+
+        for g in range(N):
+            origin_enu = gates_position[g]
+            tips_enu   = origin_enu + (gate_rotmats[g] @ axis_dirs.T).T
+
+            origin_ti = enu_to_ti(origin_enu[None])[0]
+            tips_ti   = enu_to_ti(tips_enu)
+
+            for axis_id in range(3):
+                base = g * 2
+                self._gate_axis_verts[axis_id][base] = ti.Vector(origin_ti.tolist())
+                self._gate_axis_verts[axis_id][base + 1] = ti.Vector(tips_ti[axis_id].tolist())
 
     @staticmethod
     def _rpy_deg_to_rotmat(rpy_deg: np.ndarray) -> np.ndarray:
@@ -670,3 +693,5 @@ class RacingRenderer(MultiDroneRenderer):
         if self._has_ref_traj:
             super()._draw_extras(scene, frame)
         scene.mesh(self._gate_v, indices=self._gate_i, color=self._gate_color)
+        for i in range(3):
+            scene.lines(self._gate_axis_verts[i], width=2.5, color=self._AXIS_COLORS[i])
