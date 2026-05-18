@@ -1,6 +1,7 @@
 import matplotlib.pyplot as plt
 import matplotlib.patches as patches
 import numpy as np
+from pathlib import Path
 
 import mplcyberpunk
 plt.style.use("cyberpunk")
@@ -312,17 +313,50 @@ def plot_rollout(
 
     acts = _unpack_actions(traj_np, cm)
 
+    # ── Export actions ───────────────────────────────────────────────────
+    export_base = Path("/home/adame/torchAirBender/outputs/policies/racing/data")
+    export_base.mkdir(parents=True, exist_ok=True)
+    
+    # Export srt (if available)
+    if "srt" in acts:
+        export_path = export_base / "srt_actions.csv"
+        export_data = np.column_stack([t_np, acts["srt"]])
+        header = "time,f1,f2,f3,f4"
+        np.savetxt(export_path, export_data, delimiter=",", header=header, comments="")
+    
+    # Export wrench / ctbr (if available)
+    if "wrench" in acts:
+        export_path = export_base / "ctbr_actions.csv"
+        export_data = np.column_stack([t_np, acts["wrench"]])
+        header = "time,Fz,Mx,My,Mz"
+        np.savetxt(export_path, export_data, delimiter=",", header=header, comments="")
+    
+    # Export lvyr (if available)
+    if "lvyr" in acts:
+        export_path = export_base / "lvhr_actions.csv"
+        export_data = np.column_stack([t_np, acts["lvyr"]])
+        header = "time,vx,vy,vz,psi_dot" if acts["lvyr"].shape[1] == 4 else "time,vx,vy,vz"
+        np.savetxt(export_path, export_data, delimiter=",", header=header, comments="")
+    
+    # Export gains / lvyr+g (if available)
+    if "gains" in acts:
+        export_path = export_base / "lvyr_g_actions.csv"
+        export_data = np.column_stack([t_np, acts["gains"]])
+        header = "time,kv,kR,kOmega"
+        np.savetxt(export_path, export_data, delimiter=",", header=header, comments="")
+
     # ── Errors ───────────────────────────────────────────────────────────
     pos_err_np = np.linalg.norm(p_ref - state_pos, axis=1)
     vel_err_np = np.linalg.norm(v_ref - state_vel, axis=1)
     acc_err_np = np.ones(steps)   # placeholder until state acc is stored
     pos_rmse = np.sqrt(np.mean(pos_err_np**2))
+    vel_rmse = np.sqrt(np.mean(vel_err_np**2))
     max_speed = np.max(np.linalg.norm(state_vel, axis=1))
 
     # ── Figure / GridSpec ────────────────────────────────────────────────
     fig = plt.figure(figsize=(20, 12))
     fig.suptitle(
-        f"POLICY: {label} {' '*5}|{' '*5}RMSE = {pos_rmse:.3f} m {' '*5}|{' '*5}$v_{{max}}$ = {max_speed:.3f} m/s",
+        f"POLICY: {label} {' '*5}|{' '*5}Pos RMSE = {pos_rmse:.3f} m {' '*5}|{' '*5}Vel RMSE = {vel_rmse:.3f} m/s {' '*5}|{' '*5}$v_{{max}}$ = {max_speed:.3f} m/s",
         fontsize=20,
         fontweight='bold',
         y=0.94,

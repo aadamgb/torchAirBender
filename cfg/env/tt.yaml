@@ -4,7 +4,7 @@ abbr: tt
 # policy: [16, 128, 128]   # only input and hidden layers
 policy: [21, 128, 128]   # only input and hidden layers
 
-lr: 1e-3
+lr: 1e-4
 
 loss_weights:
   pos: 2.0
