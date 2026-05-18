@@ -111,12 +111,12 @@ def randomize_parameters(
         noise = torch.empty_like(x).uniform_(-cfg.nf, cfg.nf)
         return x * (1 + noise)
     
-    def add_noise_diag_vec(J):
+    def add_noise_diag_vec(x):
         noise = torch.empty_like(J)
         noise[:,0].uniform_(-cfg.nf, cfg.nf)   # Jx
         noise[:,1].uniform_(-cfg.nf, cfg.nf)   # Jy
         noise[:,2].uniform_(-cfg.nf, cfg.nf)    # Jz usually larger
-        return J * (1 + noise)
+        return x * (1 + noise)
 
     mass = add_noise(mass)
     # l = add_noise(l)    # careful with this one, it can be a bit problematic for srt

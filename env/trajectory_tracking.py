@@ -134,7 +134,8 @@ def train(cfg: DictConfig):
 
     export_dir = f"/home/adame/torchAirBender/outputs/policies/sample_eff/{cm}/exported_data"
     os.makedirs(export_dir, exist_ok=True)
-    csv_path = os.path.join(export_dir, f"metrics_{cm}.csv")
+    csv_path = os.path.join(export_dir, f"metrics_{cm}_full.csv")
+    grad_csv_path = os.path.join(export_dir, f"gradient_norms_{cm}_full.csv")
 
     quadrotor  = QuadrotorDynamics(cfg)
     traj      = TrajectoryManager.from_harmonics(cfg.env.traj, num_envs, device)
@@ -163,9 +164,13 @@ def train(cfg: DictConfig):
     best_loss    = float("inf")
     s = 0.3
 
-    with open(csv_path, "w", newline="") as csv_file:
+    with open(csv_path, "w", newline="") as csv_file, \
+         open(grad_csv_path, "w", newline="") as grad_file:
         csv_writer = csv.writer(csv_file)
+        grad_writer = csv.writer(grad_file)
+
         csv_writer.writerow(["Step", "Loss"])
+        grad_writer.writerow(["Step", "GradientNorm"])
 
         for ep in range(cfg.episodes):
             traj.randomize()
@@ -217,6 +222,29 @@ def train(cfg: DictConfig):
                     loss = window_loss / ((t + 1) - window_start)
                     optimizer.zero_grad()
                     loss.backward()
+
+                    total_norm = 0.0
+
+                    for p in policy.parameters():
+
+                        if p.grad is not None:
+
+                            # L2 norm of this parameter gradient
+                            param_norm = p.grad.data.norm(2)
+
+                            # accumulate squared norms
+                            total_norm += param_norm.item() ** 2
+
+                    # sqrt(sum(norm_i^2))
+                    total_norm = total_norm ** 0.5
+
+                    # print(f"Gradient norm: {total_norm:.6f}")
+
+                    global_step = ep * cfg.steps + t
+
+                    grad_writer.writerow([global_step, total_norm])
+                    grad_file.flush()
+
                     optimizer.step()
                     ep_loss     += loss.item()
                     num_updates += 1

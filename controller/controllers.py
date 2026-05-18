@@ -121,7 +121,8 @@ class LVHR:
         kv=0.5, kR=0.15, kw=0.05,   # TODO: Hardcoded for now...
         max_vel=20.0,
         max_yaw_rate=4.0,
-        gain_scale = [0.5, 0.15, 0.05]   # Only for gain scheduling TODO: Hardcoded for now...
+        # gain_scale = [0.5, 0.15, 0.05]   # Only for gain scheduling TODO: Hardcoded for now...
+        gain_scale = [0.4, 0.3, 0.05]   # Only for gain scheduling TODO: Hardcoded for now...
     ):
         self.allocator    = allocator   
         self.m            = m
@@ -154,7 +155,7 @@ class LVHR:
         # Gain scheduling if cm is lvyr_g
         if gains is not None:
             # gains: (N, 3), softplus to keep positive
-            gains = F.softplus(gains) * self.gain_scale  + 0.1  # +0.1 to prevent zero gain values
+            gains = F.softplus(gains) * self.gain_scale    
             kv = gains[:, 0:1]   # (N, 1)
             kR = gains[:, 1:2]   # (N, 1)
             kw = gains[:, 2:3]   # (N, 1)

@@ -598,7 +598,7 @@ class RacingRenderer(MultiDroneRenderer):
         gates_rpy:      np.ndarray,
         gate_mesh_path: str   = '/home/adame/torchAirBender/miscellaneous/gate.obj',
         gate_scale:     float = 1.0,
-        gate_mesh_rpy_offset: tuple = (90.0, 0.0, 0.0),
+        gate_mesh_rpy_offset: tuple = (0.0, 0.0, 0.0),
         gate_color:     tuple = (0.25, 0.0, 0.5),
         gate_axis_scale: float = 0.4,
         ref_trajectory: np.ndarray = None,
