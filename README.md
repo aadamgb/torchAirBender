@@ -156,7 +156,7 @@ Multiple policies can be loaded simultaneously.
 ## 🚧 TODO List 
 - [ ] Polish the code: Remove unused testing and validation scripts, clean up commented lines.... make it more readable.
 - [ ] Add path prgoress environment.
-- [ ] Include the quadratic aerodynamics model to the quadrotor dynamics.
+- [ ] Include the quadratic aerodynamic model to the quadrotor dynamics.
 - [ ] Add the rest of the params to the randomization engine.
 - [ ] Augment the loss function for the TT task to consider the full quadrotor state (q, a, u, jerk, snap...).  
 - [ ] Merge PPO branch  to main.
