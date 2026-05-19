@@ -1,6 +1,6 @@
 # 🍃 AirBender - Master Thesis Project  🍃
 
-## A differentiable quadrotor simulator build in PyTorch | ⚠️ Ongoing Work 
+## | A differentiable quadrotor simulator build in PyTorch | ⚠️ Ongoing Work |
 
 AirBender is PyTorch-based simulator for training neural network policies to control quadrotors. The project supports several control abstractions, training tasks, includes domain randomization and a visualization enginge built in Taichi Lang. Training can be executed in parallel environments at the GPU for efficient data collection.
 
