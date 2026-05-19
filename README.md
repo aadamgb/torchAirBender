@@ -56,7 +56,7 @@ $$\mathbf{o}_k =
 \end{bmatrix}
 \in \mathbb{R}^{16}$$
 
-Four different control abstractions are implemented, cm=[srt,ctbr,lvhr.lvhr+g]:
+Four different control abstractions are implemented; cm=[srt,ctbr,lvhr,lvhr+g].
 
 
  **Single Rotor Thust (SRT)**: 
