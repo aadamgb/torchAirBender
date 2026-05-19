@@ -1,4 +1,4 @@
-# AirBender - Master Thesis Project 
+# 🍃 AirBender - Master Thesis Project  🍃
 
 ## A differentiable quadrotor simulator build in PyTorch - (⚠️Ongoing Work⚠️)
 
@@ -63,7 +63,7 @@ Four different control abstractions are implemented, cm=[srt,ctbr,lvhr.lvhr+g]:
 
 The neural network outputs direct motor commands. 
 
-$$\boldsymbol{T}_{\text{cmd}} = \boldsymbol{u} \left( T_{\text{max}}- T_{\text{min}} \right) + T_{\text{min}},\quad \boldsymbol{u} \in [0, 1]\in \Re^4\ $$
+$$\boldsymbol{T}_{\text{cmd}} = \boldsymbol{u} \left( T_{\text{max}}- T_{\text{min}} \right) + T_{\text{min}},\quad \boldsymbol{u} \in [0, 1]\in \mathbb{R}^4\ $$
 
  **Collective Thrust and Body Rates (CTBR)**: 
 
@@ -89,7 +89,7 @@ Same as LVHR, but the policy is augmented to output the geometric gains $kv$, $k
 The training logic is implemented in [`train.py`](train.py). The framework supports training on both CPU and GPU with parallel environments for efficient data collection. Training runs for a configurable number of episodes, each containing a specified number of steps. The optimization horizon $T$ is user-configurable and determines when the acumulated loss $\mathcal{L}$ is backpropageted through time.  -->
 
 
-## Usage
+## 🔹Usage
 
 ### Training
 ```bash
@@ -105,7 +105,7 @@ python test.py env=[pc,tt,racing]
 ```
 Multiple policies can be loaded simultaneously. 
 
-## Requirements
+## 📓 Requirements
 
 - PyTorch
 - Taichi Lang
@@ -114,7 +114,7 @@ Multiple policies can be loaded simultaneously.
 
 
 
-## Project Structure
+## 🌳 Project Structure
 
 ```
 ├── cfg/
@@ -148,7 +148,7 @@ Multiple policies can be loaded simultaneously.
 ```
 
 
-## Dashboard
+## 🍭 Dashboard
 <div align="center">
   <img src="media/dashboard.png" width="100%">
 </div>
