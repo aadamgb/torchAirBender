@@ -79,7 +79,7 @@ $$v_{i, \text{cmd}} = (2u_{i} - 1)  v_{i, \text{max}}, \ i \in \{1, 2, 3\}, \qua
 
 **Linear Velocities and Heading Rate plus Geometric Gains (LVHR+g)**: 
 
-Same as LVHR, but the policy is augmented to output the geometric gains $kv$, $kR$ and $k\omega$
+Same as LVHR, but the policy is augmented to output the geometric gains $kv$, $kR$ and $k\omega$.
 
 <!-- ### 🚁Quadrotor Dynamics 
 ⚠️ TODO -->
@@ -167,6 +167,4 @@ Multiple policies can be loaded simultaneously.
 
 ---
 
-**P.S.: This project is a work in progress and is not finished yet, will be by mid-August.**
-
-Further details can be found in [thesis_report.pdf](https://github.com/aadamgb/master_thesis/blob/main/main.pdf).
+**P.S.: This project is a work in progress and is not finished yet, will be by mid-August.** Further details can be found in [thesis_report.pdf](https://github.com/aadamgb/master_thesis/blob/main/main.pdf).
