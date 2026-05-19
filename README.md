@@ -63,7 +63,7 @@ Four different control abstractions are implemented, cm=[srt,ctbr,lvhr.lvhr+g]:
 
 The neural network outputs direct motor commands. 
 
-$$\boldsymbol{T}_{\text{cmd}} = \boldsymbol{u} \left( T_{\text{max}}- T_{\text{min}} \right) + T_{\text{min}},\quad \boldsymbol{u} \in [0, 1]\in \real^4\ $$
+$$\boldsymbol{T}_{\text{cmd}} = \boldsymbol{u} \left( T_{\text{max}}- T_{\text{min}} \right) + T_{\text{min}},\quad \boldsymbol{u} \in [0, 1]\in \Re^4\ $$
 
  **Collective Thrust and Body Rates (CTBR)**: 
 
@@ -75,9 +75,7 @@ $$T_{c, \text{cmd}} = u_1  (T_{\text{max}} - T_{\text{min}}) + T_{\text{min}} ,\
 
 The policy ouputs body velocities $\mathbf{v}^{\mathcal{B}}$ and heading rate $\dot{\eta}$. Then, these are mapped in a similar fashion as in [[Lee et al.](https://ieeexplore.ieee.org/document/5717652)] to obtain CTBR.
 
-$$ v_{i, \text{cmd}} = (2u_{i} - 1)  v_{i, \text{max}}, \ i \in \{1, 2, 3\}, \quad
-
-\dot{\eta}_{\text{cmd}} = (2u_{4} - 1)  \dot{\eta}_{ \text{max}} $$
+$$v_{i, \text{cmd}} = (2u_{i} - 1)  v_{i, \text{max}}, \ i \in \{1, 2, 3\}, \quad \dot{\eta}_{\text{cmd}} = (2u_{4} - 1)  \dot{\eta}_{ \text{max}}$$
 
 **Linear Velocities and Heading Rate plus Geometric Gains (LVHR+g)**: 
 
@@ -169,4 +167,4 @@ Multiple policies can be loaded simultaneously.
 
 ---
 
-**P.S: This project is a work in progress and is not finished yet, will be by mid-August.**
+**P.S.: This project is a work in progress and is not finished yet, will be by mid-August.**
