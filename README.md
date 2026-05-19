@@ -1,6 +1,6 @@
-# AirBender
+# AirBender - Master Thesis Project 
 
-## A differentiable quadrotor simulator build in PyTorch - Master Thesis Project (⚠️ongoing work)
+## A differentiable quadrotor simulator build in PyTorch - (⚠️Ongoing Work⚠️)
 
 AirBender is PyTorch-based simulator for training neural network policies to control quadrotors. The project supports several control abstractions, training tasks and includes domain randomization and a visualization enginge built in Taichi Lang. Training can be executed in parallel environments at the GPU for efficient data collection.
 
@@ -40,8 +40,8 @@ $$
 
 ### Path Progress Task
 ⚠️ TODO
-### Racing Task
-⚠️ TODO
+<!-- ### Racing Task
+⚠️ TODO -->
 
 ## 🧠Neural Network 
 The neural network is constructed in [`utils/nn.py`](utils/nn.py) as a simple feedforward multi-layer perceptron (MLP). The policy takes 16 observational inputs including the quadrotor's state and reference trajectory.
@@ -150,7 +150,12 @@ Multiple policies can be loaded simultaneously.
 ```
 
 
-## 🚧 TODO-List 
+## Dashboard
+<div align="center">
+  <img src="media/dashboard.png" width="100%">
+</div>
+
+## 🚧 TODO List 
 - [ ] Polish the code: Remove unused testing and validation scripts, clean up commented lines.... make it more readable.
 - [ ] Add path prgoress environment.
 - [ ] Include the quadratic aerodynamics model to the quadrotor dynamics.
@@ -158,3 +163,10 @@ Multiple policies can be loaded simultaneously.
 - [ ] Augment the loss function for the TT task to consider the full quadrotor state (q, a, u, jerk, snap...).  
 - [ ] Merge PPO branch  to main.
 
+
+
+
+
+---
+
+**P.S: This project is a work in progress and is not finished yet, will be by mid-August.**
