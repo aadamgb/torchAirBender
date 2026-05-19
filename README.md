@@ -168,3 +168,5 @@ Multiple policies can be loaded simultaneously.
 ---
 
 **P.S.: This project is a work in progress and is not finished yet, will be by mid-August.**
+
+Further details can be found in [thesis_report.pdf](https://github.com/aadamgb/master_thesis/blob/main/main.pdf).
