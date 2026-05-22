@@ -58,13 +58,12 @@ def reset_terminated(states, terminated, pos_ref, vel_ref, acc_ref):
 def get_observation(states, pos_ref, vel_ref, acc_ref):
 
     return torch.cat([
-        pos_ref - states[:, 0:3],   # position error  (N, 3)
-        vel_ref - states[:, 3:6],   # velocity error  (N, 3)
-        acc_ref,                    # reference acc   (N, 3)
-        # states[:, 6:10],            # quaternion      (N, 4)
-        quat_to_rotmat(states[:, 6:10]).reshape(states.shape[0], 9),            # quaternion      (N, 4)
-        states[:, 10:13],           # body rates      (N, 3)
-    ], dim=-1)                      # (N, 16)
+        pos_ref - states[:, 0:3],   
+        vel_ref - states[:, 3:6],   
+        acc_ref,                    
+        quat_to_rotmat(states[:, 6:10]).reshape(states.shape[0], 9),            
+        states[:, 10:13],           
+    ], dim=-1)                      
 
 
 def compute_loss(states, pos_ref, vel_ref, acc_ref, weights, mask=None):
@@ -75,9 +74,7 @@ def compute_loss(states, pos_ref, vel_ref, acc_ref, weights, mask=None):
                   for x in (states, pos_ref, vel_ref, acc_ref))
 
     pos_loss  = torch.linalg.norm(p - s[:, 0:3], dim=-1).mean()
-    # pos_loss  =  torch.sum((p - s[:, 0:3])**2, dim=-1).mean()
     vel_loss  = torch.linalg.norm(v - s[:, 3:6], dim=-1).mean()
-    # vel_loss  =  torch.sum((v - s[:, 3:6])**2, dim=-1).mean()
     rate_loss = (s[:, 10:13] ** 2).sum(dim=-1).mean()
 
     from utils.math import quat_to_rotmat
@@ -91,7 +88,6 @@ def compute_loss(states, pos_ref, vel_ref, acc_ref, weights, mask=None):
 
 def build_controller(cm_type, quadrotor, cfg):
     alloc = DirectAllocation(quadrotor._alloc_matrix)
-    # TODO: ideally most of the params should be gotten from quadrotor object
     if cm_type == "srt":
         return SRT(
             mass=quadrotor.m,
@@ -132,11 +128,6 @@ def train(cfg: DictConfig):
     out_dir  = f"/home/adame/torchAirBender/outputs/policies/sample_eff/{cm}"
     os.makedirs(out_dir, exist_ok=True)
 
-    export_dir = f"/home/adame/torchAirBender/outputs/policies/sample_eff/{cm}/exported_data"
-    os.makedirs(export_dir, exist_ok=True)
-    csv_path = os.path.join(export_dir, f"metrics_{cm}_full.csv")
-    grad_csv_path = os.path.join(export_dir, f"gradient_norms_{cm}_full.csv")
-
     quadrotor  = QuadrotorDynamics(cfg)
     traj      = TrajectoryManager.from_harmonics(cfg.env.traj, num_envs, device)
 
@@ -145,18 +136,14 @@ def train(cfg: DictConfig):
 
     controller = build_controller(cm, quadrotor, cfg)
     
-    policy    = MLP(layer_sizes=list(cfg.env.policy) + [ACT_DIMS[cm]], 
-                    # activation=nn.Tanh,                           
+    policy    = MLP(layer_sizes=list(cfg.env.policy) + [ACT_DIMS[cm]],                        
                     activation=nn.ReLU,                             
                     output_activation=nn.Sigmoid(), 
                     output_bias_init=0.0
                     ).to(device)
     
-    # ⚠️Load policy⚠️
-    # policy.load_state_dict(torch.load("/home/adame/torchAirBender/outputs/policies/CAMP/uzh/ctbr/uzh_starter.pt", map_location=device))
-    
+
     optimizer = torch.optim.Adam(policy.parameters(), lr=cfg.env.lr)
-    # optimizer = torch.optim.AdamW(policy.parameters(), lr=cfg.env.lr)
 
     traj_data = torch.empty((cfg.steps, CM_COLS[cm]), device=device)
     last_saved_w = 1.0
@@ -164,123 +151,85 @@ def train(cfg: DictConfig):
     best_loss    = float("inf")
     s = 0.3
 
-    with open(csv_path, "w", newline="") as csv_file, \
-         open(grad_csv_path, "w", newline="") as grad_file:
-        csv_writer = csv.writer(csv_file)
-        grad_writer = csv.writer(grad_file)
+    for ep in range(cfg.episodes):
+        traj.randomize()
 
-        csv_writer.writerow(["Step", "Loss"])
-        grad_writer.writerow(["Step", "GradientNorm"])
+        states, last_params = reset(cfg, traj, quadrotor, controller)
 
-        for ep in range(cfg.episodes):
-            traj.randomize()
+        ep_loss, num_updates  = 0.0, 0
+        sq_error_sum          = torch.zeros(1, device=device)
+        num_samples           = 0
+        window_loss           = torch.zeros(1, device=device)
+        window_start          = 0
 
-            states, last_params = reset(cfg, traj, quadrotor, controller)
+        for t in range(cfg.steps):
+            if t % cfg.truncation == 0:
+                states       = states.detach()
+                window_start = t
+                window_loss  = torch.zeros(1, device=device)
 
-            ep_loss, num_updates  = 0.0, 0
-            sq_error_sum          = torch.zeros(1, device=device)
-            num_samples           = 0
-            window_loss           = torch.zeros(1, device=device)
-            window_start          = 0
+            pos_ref, vel_ref, acc_ref, _ = traj.get_reference(t, speed_scale=s)
 
-            for t in range(cfg.steps):
-                if t % cfg.truncation == 0:
-                    states       = states.detach()
-                    window_start = t
-                    window_loss  = torch.zeros(1, device=device)
+            obs     = get_observation(states, pos_ref, vel_ref, acc_ref)
+            raw     = policy(obs)
 
-                pos_ref, vel_ref, acc_ref, _ = traj.get_reference(t, speed_scale=s)
+            if cm == "lvhr+g":
+                actions = controller(states, raw[:, 0:4], gains=raw[:, 4:7])
+            else:
+                actions = controller(states, raw)
+            
+            states  = quadrotor.step(states, actions[:, 0:4])            
 
-                obs     = get_observation(states, pos_ref, vel_ref, acc_ref)
-                raw     = policy(obs)
+            dist    = torch.linalg.norm(pos_ref - states[:, 0:3], dim=-1)
+            too_far = dist > cfg.env.max_dist_to_target
 
-                if cm == "lvhr+g":
-                    actions = controller(states, raw[:, 0:4], gains=raw[:, 4:7])
-                else:
-                    actions = controller(states, raw)
+            sq_error_sum += (dist ** 2).sum()
+            num_samples  += dist.numel()
 
-                states  = quadrotor.step(states, actions[:, 0:4])            # Forward pass through the dynamics
+            window_loss += compute_loss(states, pos_ref, vel_ref, acc_ref, cfg.env.loss_weights, mask=~too_far)
 
-                dist    = torch.linalg.norm(pos_ref - states[:, 0:3], dim=-1)
-                too_far = dist > cfg.env.max_dist_to_target
+            if ep == cfg.episodes - 1:
+                traj_data[t] = torch.cat([
+                    states[0].detach(),       # 0:17  — full state
+                    pos_ref[0].detach(),      # 17:20 — p_ref
+                    vel_ref[0].detach(),      # 20:23 — v_ref
+                    acc_ref[0].detach(),      # 23:26 — a_ref
+                    actions[0].detach(),      # 26:N  — srt + (wrench + lvyr + gains)
+                ], dim=0)
 
-                sq_error_sum += (dist ** 2).sum()
-                num_samples  += dist.numel()
+            if (t + 1) % cfg.truncation == 0 or (t + 1) == cfg.steps:
+                loss = window_loss / ((t + 1) - window_start)
+                optimizer.zero_grad()
+                loss.backward()
+                optimizer.step()
+                ep_loss     += loss.item()
+                num_updates += 1
 
-                window_loss += compute_loss(states, pos_ref, vel_ref, acc_ref, cfg.env.loss_weights, mask=~too_far)
+            states = reset_terminated(states, too_far, pos_ref, vel_ref, acc_ref)
 
-                if ep == cfg.episodes - 1:
-                    traj_data[t] = torch.cat([
-                        states[0].detach(),       # 0:17  — full state
-                        pos_ref[0].detach(),      # 17:20 — p_ref
-                        vel_ref[0].detach(),      # 20:23 — v_ref
-                        acc_ref[0].detach(),      # 23:26 — a_ref
-                        actions[0].detach(),      # 26:N  — srt + (wrench + lvyr + gains)
-                    ], dim=0)
+        avg_loss = ep_loss / max(num_updates, 1)
+        rmse     = torch.sqrt(sq_error_sum / num_samples).item()
+        print(f"  Episode {ep+1:>4}/{cfg.episodes}  |  Loss: {avg_loss:.4f}  |  RMSE: {rmse:.3f} m")
 
-                if (t + 1) % cfg.truncation == 0 or (t + 1) == cfg.steps:
-                    loss = window_loss / ((t + 1) - window_start)
-                    optimizer.zero_grad()
-                    loss.backward()
+        if rmse < cfg.env.rmse_threshold:
+            print(f"  >> RMSE threshold reached, s: {cfg.env.traj.w:.2f} → {cfg.env.traj.w + cfg.env.w_increase:.2f} 🔥")
+            cfg.env.traj.w += cfg.env.w_increase
 
-                    total_norm = 0.0
-
-                    for p in policy.parameters():
-
-                        if p.grad is not None:
-
-                            # L2 norm of this parameter gradient
-                            param_norm = p.grad.data.norm(2)
-
-                            # accumulate squared norms
-                            total_norm += param_norm.item() ** 2
-
-                    # sqrt(sum(norm_i^2))
-                    total_norm = total_norm ** 0.5
-
-                    # print(f"Gradient norm: {total_norm:.6f}")
-
-                    global_step = ep * cfg.steps + t
-
-                    grad_writer.writerow([global_step, total_norm])
-                    grad_file.flush()
-
-                    optimizer.step()
-                    ep_loss     += loss.item()
-                    num_updates += 1
-
-                states = reset_terminated(states, too_far, pos_ref, vel_ref, acc_ref)
-
-            avg_loss = ep_loss / max(num_updates, 1)
-            rmse     = torch.sqrt(sq_error_sum / num_samples).item()
-            print(f"  Episode {ep+1:>4}/{cfg.episodes}  |  Loss: {avg_loss:.4f}  |  RMSE: {rmse:.3f} m")
-
-            # wall_time = time.time() - start
-            total_steps = (ep + 1) * cfg.steps * num_envs
-            csv_writer.writerow([total_steps, float(avg_loss)])
-            csv_file.flush()
-
-            if rmse < cfg.env.rmse_threshold:
-                print(f"  >> RMSE threshold reached, s: {cfg.env.traj.w:.2f} → {cfg.env.traj.w + cfg.env.w_increase:.2f} 🔥")
-                # print(f"  >> RMSE threshold reached, s: {s:.2f} → {s + cfg.env.w_increase:.2f} 🔥")
-                cfg.env.traj.w += cfg.env.w_increase
-                # s += cfg.env.w_increase
-
-                if cfg.env.traj.w >= last_saved_w + SAVE_INTERVAL:
-                    torch.save(policy.state_dict(), os.path.join(out_dir, f"trck_{cfg.env.traj.w:.2f}.pt"))
-                    last_saved_w = cfg.env.traj.w
+            if cfg.env.traj.w >= last_saved_w + SAVE_INTERVAL:
+                torch.save(policy.state_dict(), os.path.join(out_dir, f"trck_{cfg.env.traj.w:.2f}.pt"))
+                last_saved_w = cfg.env.traj.w
 
 
-            if avg_loss < best_loss:
-                best_loss = avg_loss
-                torch.save(policy.state_dict(), os.path.join(out_dir, "trck_best.pt"))
+        if avg_loss < best_loss:
+            best_loss = avg_loss
+            torch.save(policy.state_dict(), os.path.join(out_dir, "trck_best.pt"))
 
     torch.save(policy.state_dict(), os.path.join(out_dir, "trck_final.pt"))
     torch.jit.script(policy.cpu()).save(os.path.join(out_dir, "trck_final_scripted.pt"))
     print(f"\nTotal training time: {time.time() - start:.1f}s")
     
     traj_np = traj_data.cpu().numpy()
-    # ---- Plot ------
+
     plot_rollout(
         traj_np        = traj_np,
         dt             = cfg.dt,
@@ -290,7 +239,7 @@ def train(cfg: DictConfig):
         mass       = float(quadrotor.m[0].cpu()),
         # save_path = f"/home/adame/torchAirBender/outputs/plots/{cm}_dashboard.png",  # uncomment to save instead of show
     )
-    # ---- Render ------
+
     MultiDroneRenderer(trajectory=traj_np, ref_trajectory=traj_np[:, 17:20]).run()
 
 
@@ -342,12 +291,11 @@ def test(cfg: DictConfig):
 
         controller = build_controller(spec["cm"], quadrotor, cfg)
 
-        # ── Load policy ──────────────────────────────────────────────────
+        # Load policy 
         if spec["type"] == "ppo":
             from stable_baselines3 import PPO as SB3PPO
             sb3_model = SB3PPO.load(spec["path"], device=device)
             def get_action(obs):
-                # obs: (N, 16) tensor → numpy → predict → tensor
                 action_np, _ = sb3_model.predict(
                     obs.cpu().numpy(), deterministic=True
                 )
@@ -365,7 +313,7 @@ def test(cfg: DictConfig):
             def get_action(obs):
                 return policy(obs)
 
-        # ── Randomize dynamics ───────────────────────────────────────────
+        # Randomize dynamics 
         if randomize:
             params = randomize_parameters(cfg.dynamics, cfg.num_envs, device)
             quadrotor.set_parameters(params)
@@ -374,7 +322,7 @@ def test(cfg: DictConfig):
                 J            = quadrotor.J,
             )
 
-        # ── Reset state at trajectory start ─────────────────────────────
+        # Reset state at trajectory start
         pos0, vel0, acc0, _ = traj.get_reference(0)
         states = torch.zeros((cfg.num_envs, 17), device=device)
         states[:, 0:3]  = pos0.detach()
@@ -383,7 +331,7 @@ def test(cfg: DictConfig):
 
         traj_data = torch.empty((cfg.steps, CM_COLS[spec["cm"]]), device=device)
 
-        # ── Rollout ──────────────────────────────────────────────────────
+        # Rollout 
         with torch.no_grad():
             for t in range(cfg.steps):
                 pos_ref, vel_ref, acc_ref, _ = traj.get_reference(t)
@@ -426,7 +374,6 @@ def test(cfg: DictConfig):
             "label": spec["label"],
         })
 
-        # ── Plot dashboard ───────────────────────────────────────────────
         plot_rollout(
             traj_np    = traj_np,
             dt         = cfg.dt,
@@ -436,5 +383,4 @@ def test(cfg: DictConfig):
             mass       = float(params.mass[0].cpu()),
         )
 
-    # ── Render all drones together ───────────────────────────────────────
     MultiDroneRenderer(drones=drones, ref_trajectory=ref_traj).run()

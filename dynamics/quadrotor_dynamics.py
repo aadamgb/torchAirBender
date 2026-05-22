@@ -67,7 +67,6 @@ def _rotational_deriv(
     q_dot = quat_derivative(q, w)                                  
     return q_dot, w_dot
 
-
 @torch.jit.script
 def integrate_euler(
     dt: float,
@@ -222,7 +221,6 @@ class QuadrotorDynamics:
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
-
     def step(self, state: Tensor, action: Tensor) -> Tensor:
         return CustomGrad.apply(
             state,
@@ -259,7 +257,6 @@ class QuadrotorDynamics:
             'max_TWR':    self.max_TWR
         }
     
-
     def get_srt_hover_thurst(self):
         return self.m * self.g / 4.0
     

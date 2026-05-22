@@ -1,7 +1,6 @@
 defaults:
   - env: tt        # Task
   - dynamics: a300    # Quadrotor Model
-  - val: body_rates
   - _self_
 
 
