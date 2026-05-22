@@ -130,10 +130,6 @@ def train(cfg: DictConfig):
     out_dir  = f"/home/adame/torchAirBender/outputs/policies/racing/{cm}"
     os.makedirs(out_dir, exist_ok=True)
 
-    # export_dir = "/home/adame/torchAirBender/outputs/policies/TT/ctbr/exported_data"
-    # os.makedirs(export_dir, exist_ok=True)
-    # csv_path = os.path.join(export_dir, "training_metrics.csv")
-
     quadrotor  = QuadrotorDynamics(cfg)
     # traj      = TrajectoryManager.from_harmonics(cfg.env.traj, num_envs, device)
 
@@ -150,10 +146,7 @@ def train(cfg: DictConfig):
     
     # ⚠️Load policy⚠️
     policy.load_state_dict(torch.load("/home/adame/torchAirBender/outputs/policies/sample_eff/ctbr/trck_1.50.pt", map_location=device))
-    # policy.load_state_dict(torch.load("/home/adame/torchAirBender/outputs/policies/sample_eff/srt/trck_1.60.pt", map_location=device))
-    # policy.load_state_dict(torch.load("/home/adame/torchAirBender/outputs/policies/sample_eff/lvhr/trck_1.50.pt", map_location=device))
-    # policy.load_state_dict(torch.load("/home/adame/torchAirBender/outputs/policies/sample_eff/lvhr+g/trck_1.50.pt", map_location=device))
-    
+
     optimizer = torch.optim.Adam(policy.parameters(), lr=cfg.env.lr)
 
     traj_data = torch.empty((cfg.steps, CM_COLS[cm]), device=device)
@@ -162,11 +155,6 @@ def train(cfg: DictConfig):
     best_loss    = float("inf")
     s = 0.4
     last_saved_w = s
-
-    # with open(csv_path, "w", newline="") as csv_file:
-    #     csv_writer = csv.writer(csv_file)
-    #     csv_writer.writerow(["Wall time", "Step", "Value"])
-
     for ep in range(cfg.episodes):
         # traj.randomize()
 
@@ -227,11 +215,6 @@ def train(cfg: DictConfig):
         rmse     = torch.sqrt(sq_error_sum / num_samples).item()
         print(f"  Episode {ep+1:>4}/{cfg.episodes}  |  Loss: {avg_loss:.4f}  |  RMSE: {rmse:.3f} m")
 
-        # wall_time = time.time() - start
-        # total_steps = (ep + 1) * cfg.steps * num_envs
-        # csv_writer.writerow([f"{wall_time:.2f}", total_steps, float(avg_loss)])
-        # csv_file.flush()
-
         if rmse < cfg.env.rmse_threshold:
             # print(f"  >> RMSE threshold reached, s: {cfg.env.traj.w:.2f} → {cfg.env.traj.w + cfg.env.w_increase:.2f} 🔥")
             print(f"  >> RMSE threshold reached, s: {s:.2f} → {s + cfg.env.w_increase:.2f} 🔥")
@@ -252,7 +235,6 @@ def train(cfg: DictConfig):
     print(f"\nTotal training time: {time.time() - start:.1f}s")
     
     traj_np = traj_data.cpu().numpy()
-    # ---- Plot ------
     plot_rollout(
         traj_np        = traj_np,
         dt             = cfg.dt,
@@ -262,7 +244,6 @@ def train(cfg: DictConfig):
         mass       = float(quadrotor.m[0].cpu()),
         # save_path = f"/home/adame/torchAirBender/outputs/plots/{cm}_dashboard.png",  # uncomment to save instead of show
     )
-    # ---- Render ------
     MultiDroneRenderer(trajectory=traj_np, ref_trajectory=traj_np[:, 17:20]).run()
 
 
@@ -272,21 +253,6 @@ def train(cfg: DictConfig):
 
 def test(cfg: DictConfig):
     policies = [
-        # {"type": "bptt",
-        #  "cm": "srt", 
-        #  "path": "/home/adame/torchAirBender/outputs/policies/racing/srt/uzh_0.50.pt",  
-        #  "color": (0.2, 0.6, 1.0)},
-
-        # {"type": "bptt",
-        #  "cm": "ctbr", 
-        #  "path": "/home/adame/torchAirBender/outputs/policies/racing/ctbr/uzh_0.50.pt",  
-        #  "color": (0.2, 0.6, 1.0)},
-
-        # {"type": "bptt",
-        #  "cm": "lvhr", 
-        #  "path": "/home/adame/torchAirBender/outputs/policies/racing/lvhr/uzh_0.50.pt",  
-        #  "color": (0.2, 0.6, 1.0)},
-
         {"type": "bptt",
          "cm": "lvhr+g", 
          "path": "/home/adame/torchAirBender/outputs/policies/racing/lvhr+g/uzh_0.50.pt",  
@@ -304,7 +270,6 @@ def test(cfg: DictConfig):
     seed      = None
     save      = True
     csv_path  = "/home/adame/torchAirBender/outputs/policies/racing/data/uzh-05-lvhr+g.csv"
-    # os.makedirs(csv_path, exist_ok=True)
 
     if seed is not None:
         torch.manual_seed(seed)
@@ -325,12 +290,11 @@ def test(cfg: DictConfig):
 
         controller = build_controller(spec["cm"], quadrotor, cfg)
 
-        # ── Load policy ──────────────────────────────────────────────────
+        # Load policy 
         if spec["type"] == "ppo":
             from stable_baselines3 import PPO as SB3PPO
             sb3_model = SB3PPO.load(spec["path"], device=device)
             def get_action(obs):
-                # obs: (N, 16) tensor → numpy → predict → tensor
                 action_np, _ = sb3_model.predict(
                     obs.cpu().numpy(), deterministic=True
                 )
@@ -348,7 +312,7 @@ def test(cfg: DictConfig):
             def get_action(obs):
                 return policy(obs)
 
-        # ── Randomize dynamics ───────────────────────────────────────────
+        # Randomize dynamics
         if randomize:
             params = randomize_parameters(cfg.dynamics, cfg.num_envs, device)
             quadrotor.set_parameters(params)
@@ -357,7 +321,6 @@ def test(cfg: DictConfig):
                 J            = quadrotor.J,
             )
 
-        # ── Reset state at trajectory start ─────────────────────────────
         pos0, vel0, acc0, _ = traj.get_reference(0)
         states = torch.zeros((cfg.num_envs, 17), device=device)
         states[:, 0:3]  = pos0.detach()
@@ -366,7 +329,7 @@ def test(cfg: DictConfig):
 
         traj_data = torch.empty((cfg.steps, CM_COLS[spec["cm"]]), device=device)
 
-        # ── Rollout ──────────────────────────────────────────────────────
+        # Rollout 
         with torch.no_grad():
             for t in range(cfg.steps):
                 pos_ref, vel_ref, acc_ref, _ = traj.get_reference(t, 0.5)
@@ -402,7 +365,6 @@ def test(cfg: DictConfig):
             ref_data = traj_np[:, [0,1,2,3,4,5,17,18,19,20,21,22,26,27,28,29]]  # [px,py,pz,vx,vy,vz,px_ref,py_ref,pz_ref,vx_ref,vy_ref,vz_ref]
             with open(csv_path, "w", newline="") as f:
                 writer = csv.writer(f)
-                # writer.writerow(["time", "px", "py", "pz", "vx", "vy", "vz", "ax", "ay", "az"])
                 writer.writerow(["time", "px", "py", "pz", "vx", "vy", "vz","px_ref", "py_ref", "pz_ref", "vx_ref", "vy_ref", "vz_ref", "T1", "T2", "T3", "T4"])
                 for i, row in enumerate(ref_data):
                     writer.writerow([i * cfg.dt, *row.tolist()])
@@ -425,10 +387,6 @@ def test(cfg: DictConfig):
         #     arm_angle  = float(params.arm_angle[0].cpu()),
         #     mass       = float(params.mass[0].cpu()),
         # )
-
-    # ── Render all drones together ───────────────────────────────────────
-    # MultiDroneRenderer(drones=drones, ref_trajectory=ref_traj).run()
-
 
     gates_position, gates_rpy = load_gates_from_yaml(
         "/home/adame/torchAirBender/miscellaneous/race_tracks/uzh_7g_moved.yaml"

@@ -1,23 +1,7 @@
 import torch
 from torch import Tensor
 
-
 class CustomGrad(torch.autograd.Function):
-    """
-    Custom autograd function that decouples the forward and backward passes
-    of the quadrotor dynamics:
-
-      Forward  : _step_fwd  — full motor-lag simulation 
-      Backward : _step_bck  — simplified algebraic step 
-
-    Usage:
-        from surrogate_gradient import CustomGrad
-        
-        next_state = CustomGrad.apply(
-            state, thrusts, alloc, m, J, km, a0, motor_tau, G, dt,
-            _step_fwd, _step_bck,
-        )
-    """
 
     @staticmethod
     def forward(
@@ -32,8 +16,8 @@ class CustomGrad(torch.autograd.Function):
         motor_tau: Tensor,
         G:         Tensor,
         dt:        float,
-        step_fwd,           # callable — full forward dynamics
-        step_bck,           # callable — surrogate backward dynamics
+        step_fwd,           
+        step_bck,           
     ) -> Tensor:
         ctx.save_for_backward(state, thrusts, alloc, m, J, G)
         ctx.dt       = dt
@@ -61,8 +45,6 @@ class CustomGrad(torch.autograd.Function):
                 alloc=alloc, m=m, J=J, G=G, dt=dt,
             )
 
-        # _step_bck returns (B, 13); _step_fwd returns (B, 17).
-        # Slice grad_output to match the surrogate output width.
         grads = torch.autograd.grad(
                 surrogate_out, 
                 (state_, thrusts_), 

@@ -9,11 +9,10 @@ from dynamics.surrogate_gradient import CustomGrad
 
 #=====================================================
 """
-    Motor layout (top view, Z-up ENU):
+Motor layout 
                     ^ b2
                     |
            (2) CW   |    (3) CCW
-               \    |    /
                 \   |   /
                  \  |  /
         ----------- + ----------> b1
@@ -25,20 +24,13 @@ from dynamics.surrogate_gradient import CustomGrad
 """
 #=====================================================
 
+# ------------------------------------------------------------------
+# Helpers
+# ------------------------------------------------------------------
 @torch.jit.script
 def _compute_wrench(alloc_matrix: Tensor, action: Tensor) -> tuple[Tensor, Tensor]:
-    """
-    Maps per-motor thrusts to collective thrust + body torques.
 
-    Args:
-        alloc_matrix : (N, 4, 4)
-        action       : (B, 4)
-
-    Returns:
-        Fz  : (B,)
-        tau : (B, 3)
-    """
-    W   = torch.bmm(alloc_matrix, action.unsqueeze(-1)).squeeze(-1)  # (B, 4)
+    W   = torch.bmm(alloc_matrix, action.unsqueeze(-1)).squeeze(-1) 
     Fz  = W[..., 0]
     tau = W[..., 1:4]
     return Fz, tau
@@ -51,26 +43,16 @@ def _translational_deriv(
     m:  Tensor,
     g:  Tensor,
 ) -> tuple[Tensor, Tensor]:
-    """
-    Returns (p_dot, v_dot).
 
-    Args:
-        v  : (B, 3)
-        q  : (B, 4)
-        Fz : (B,)
-        m  : (N,) or (1,)
-        g  : (3,)
-    """
     R = quat_to_rotmat(q) 
 
     thrust_body = torch.stack(
         [torch.zeros_like(Fz), torch.zeros_like(Fz), Fz], dim=-1
-    ).unsqueeze(-1)                                                   # (B, 3, 1)
-    thrust_world = torch.bmm(R, thrust_body).squeeze(-1)              # (B, 3)
+    ).unsqueeze(-1)                                                   
+    thrust_world = torch.bmm(R, thrust_body).squeeze(-1)              
 
-    v_dot = thrust_world / m.unsqueeze(-1) + g                        # (B, 3)
+    v_dot = thrust_world / m.unsqueeze(-1) + g                        
     return v, v_dot
-
 
 @torch.jit.script
 def _rotational_deriv(
@@ -79,18 +61,10 @@ def _rotational_deriv(
     tau: Tensor,
     J:   Tensor,
 ) -> tuple[Tensor, Tensor]:
-    """
-    Returns (q_dot, w_dot).
 
-    Args:
-        q   : (B, 4)
-        w   : (B, 3)
-        tau : (B, 3)
-        J   : (N, 3) or (1, 3)
-    """
     J_inv = 1.0 / J
-    w_dot = J_inv * (tau - torch.linalg.cross(w, J * w))          # (B, 3)
-    q_dot = quat_derivative(q, w)                                  # (B, 4)
+    w_dot = J_inv * (tau - torch.linalg.cross(w, J * w))          
+    q_dot = quat_derivative(q, w)                                  
     return q_dot, w_dot
 
 
@@ -102,12 +76,13 @@ def integrate_euler(
 ) -> tuple[Tensor, Tensor, Tensor, Tensor]:
     v_next = v + v_dot * dt
     p_next = p + v_next * dt
-    q_next = nn.functional.normalize(q + q_dot * dt, dim=-1)               # renormalize quaternion
+    q_next = nn.functional.normalize(q + q_dot * dt, dim=-1)               
     w_next = w + w_dot * dt
     return p_next, v_next, q_next, w_next
 
-
-# @torch.jit.script
+# ------------------------------------------------------------------
+# Forward Step
+# ------------------------------------------------------------------
 def _step_fwd(
     state:         Tensor,
     thrusts:       Tensor,
@@ -120,19 +95,7 @@ def _step_fwd(
     G:             Tensor,
     dt:            float,
 ) -> Tensor:
-    """
-    Args:
-        state        : (B, 13)
-        action       : (B,  4)
-        alloc_matrix : (N, 4, 4)
-        m            : (N,) or (1,)
-        J            : (N, 3) or (1, 3)
-        g            : (3,)
-        dt           : scalar float
 
-    Returns:
-        next_state : (B, 13)
-    """
     p = state[..., 0:3]
     v = state[..., 3:6]
     q = state[..., 6:10]
@@ -142,24 +105,23 @@ def _step_fwd(
     Omegas_cmd = torch.sqrt(torch.clamp(thrusts / a0.view(-1, 1), min=1e-3))
     Omegas_dot = (Omegas_cmd - Omegas) / motor_tau  # TODO: Improve this.... clamp rate limits
     Omegas_next = Omegas + Omegas_dot * dt
-    # Omegas_next = torch.clamp(Omegas_next, 0.0, 21400)
     thrusts_next = a0.view(-1, 1) * Omegas_next**2
 
     Fz, tau = _compute_wrench(alloc, thrusts_next)
     p_dot, v_dot = _translational_deriv(v, q, Fz, m, G)
     q_dot, w_dot = _rotational_deriv(q, w, tau, J)
 
-    # w_dot[:, 2] = torch.clamp(w_dot[:, 2], -5.0, 5.0)
 
     p_next, v_next, q_next, w_next = integrate_euler(
         dt, p, v, q, w, p_dot, v_dot, q_dot, w_dot
     )
 
-    # w_next[:, 2] = torch.clamp(w_next[:, 2], -3.0, 3.0)
 
     return torch.cat([p_next, v_next, q_next, w_next, Omegas_next], dim=-1)
 
-# @torch.jit.script
+# ------------------------------------------------------------------
+# Backward Step
+# ------------------------------------------------------------------
 def _step_bck(
     state:         Tensor,
     action:        Tensor,
@@ -169,19 +131,6 @@ def _step_bck(
     G:             Tensor,
     dt:            float,
 ) -> Tensor:
-    """
-    Args:
-        state        : (B, 13)
-        action       : (B,  4)
-        alloc_matrix : (N, 4, 4)
-        m            : (N,) or (1,)
-        J            : (N, 3) or (1, 3)
-        g            : (3,)
-        dt           : scalar float
-
-    Returns:
-        next_state : (B, 13)
-    """
     p = state[..., 0:3]
     v = state[..., 3:6]
     q = state[..., 6:10]
@@ -197,6 +146,7 @@ def _step_bck(
 
     return torch.cat([p_next, v_next, q_next, w_next], dim=-1)
 
+
 # ===========================================================
 #                        Main class 
 # ===========================================================
@@ -206,19 +156,19 @@ class QuadrotorDynamics:
         self.device = torch.device(cfg.device)
         self.dt     = cfg.dt
 
-        self.G = torch.tensor([0.0, 0.0, -9.81], device=self.device)  # (3,)
+        self.G = torch.tensor([0.0, 0.0, -9.81], device=self.device)  
         self.g = 9.81
 
         self.m = torch.tensor(
             [cfg.dynamics.mass.nominal], device=self.device
-        )                                                               # (1,)
+        )                                                               
         self.arm_length = torch.full(
             (1, 4), cfg.dynamics.arm_length.nominal, device=self.device
-        )                                                               # (1, 4)
+        )                                                               
         self.arm_angle = (
             torch.tensor([cfg.dynamics.arm_angle.nominal], device=self.device)
             * torch.pi / 180
-        )                                                               # (1,)
+        )                                                               
         self.J = torch.tensor(
             [[
                 cfg.dynamics.inertia.xx.nominal,
@@ -226,7 +176,7 @@ class QuadrotorDynamics:
                 cfg.dynamics.inertia.zz.nominal,
             ]],
             device=self.device,
-        )                                                               # (1, 3)
+        )                                                               
         self.km = torch.tensor(
             [cfg.dynamics.km.nominal], device=self.device
         ) 
@@ -254,7 +204,7 @@ class QuadrotorDynamics:
     # ------------------------------------------------------------------
 
     def _rebuild_alloc_matrix(self):
-        s  = torch.sin(self.arm_angle)     # Careful with the units!!!!
+        s  = torch.sin(self.arm_angle)     
         c  = torch.cos(self.arm_angle)
         l  = self.arm_length
         km = self.km
@@ -288,35 +238,8 @@ class QuadrotorDynamics:
             _step_fwd,
             _step_bck,
         )
-        # return _step_fwd(
-        #     state=state,
-        #     thrusts=action,
-        #     alloc=self._alloc_matrix,
-        #     m=self.m,
-        #     J=self.J,
-        #     km=self.km,
-        #     a0=self.a0,
-        #     motor_tau=self.motor_tau,
-        #     G=self.G,
-        #     dt=self.dt,
-        # )
-        # return _step_bck(
-        #     state=state,
-        #     action=action,
-        #     alloc=self._alloc_matrix,
-        #     m=self.m,
-        #     J=self.J,
-        #     G=self.G,
-        #     dt=self.dt,
-        # )
 
     def set_parameters(self, params: QuadrotorParams):
-        """
-        Apply randomized per-env parameters and rebuild allocation matrix.
-
-        Args:
-            params : QuadrotorParams with tensors of shape (N, ...)
-        """
         self.m          = params.mass
         self.arm_length = params.arm_length
         self.arm_angle  = params.arm_angle * torch.pi / 180
