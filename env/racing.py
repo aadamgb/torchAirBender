@@ -253,10 +253,19 @@ def train(cfg: DictConfig):
 
 def test(cfg: DictConfig):
     policies = [
+        # {"type": "bptt",
+        #  "cm": "lvhr+g", 
+        #  "path": "/home/adame/torchAirBender/outputs/policies/racing/lvhr+g/uzh_0.50.pt",  
+        #  "color": (0.2, 0.6, 1.0)},
+
         {"type": "bptt",
-         "cm": "lvhr+g", 
-         "path": "/home/adame/torchAirBender/outputs/policies/racing/lvhr+g/uzh_0.50.pt",  
+         "cm": "ctbr", 
+         "path": "/home/adame/torchAirBender/outputs/policies/racing/ctbr/uzh_final.pt",  
          "color": (0.2, 0.6, 1.0)},
+        {"type": "bptt",
+         "cm": "ctbr", 
+         "path": "/home/adame/torchAirBender/outputs/policies/racing/ctbr/uzh_0.60.pt",  
+         "color": (1.0, 0.55, 0.0)},
 
         # {"type": "ppo",
         #  "cm": "ctbr",
@@ -276,7 +285,6 @@ def test(cfg: DictConfig):
 
     device    = cfg.device
     quadrotor = QuadrotorDynamics(cfg)
-    # traj      = TrajectoryManager.from_harmonics(cfg.env.traj, cfg.num_envs, device)
     path = "/home/adame/torchAirBender/miscellaneous/trajectories/TOGT/togt_traj.csv"
     traj = TrajectoryManager.from_togt(path, cfg.num_envs, cfg.device)
 

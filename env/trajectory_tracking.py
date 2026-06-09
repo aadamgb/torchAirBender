@@ -249,18 +249,18 @@ def train(cfg: DictConfig):
 
 def test(cfg: DictConfig):
     policies = [
-        {"type": "bptt",
-         "cm": "srt", 
-         "path": "/home/adame/torchAirBender/outputs/policies/TT/srt/trck_1.80.pt",  
-         "color": (0.2, 0.6, 1.0)},
+        # {"type": "bptt",
+        #  "cm": "srt", 
+        #  "path": "/home/adame/torchAirBender/outputs/policies/TT/srt/trck_1.80.pt",  
+        #  "color": (0.2, 0.6, 1.0)},
         {"type": "bptt",
          "cm": "ctbr", 
          "path": "/home/adame/torchAirBender/outputs/policies/TT/ctbr/trck_1.90.pt",  
          "color": (0.2, 0.6, 1.0)},
-        {"type": "bptt",
-         "cm": "lvhr", 
-         "path": "/home/adame/torchAirBender/outputs/policies/TT/lvhr/trck_1.80.pt",  
-         "color": (0.2, 0.6, 1.0)},
+        # {"type": "bptt",
+        #  "cm": "lvhr", 
+        #  "path": "/home/adame/torchAirBender/outputs/policies/TT/lvhr/trck_1.80.pt",  
+        #  "color": (0.2, 0.6, 1.0)},
 
         # {"type": "ppo",
         #  "cm": "ctbr",
