@@ -16,3 +16,5 @@ steps: 800
 
 truncation: 50
 
+headless: false
+

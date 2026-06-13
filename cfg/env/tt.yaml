@@ -29,3 +29,18 @@ w_increase: 0.0
 # # For the CTBR controller
 kp_rate: 0.2
 w_max: 5.0
+
+
+# --- Noise added to Quad's States --
+#     |->  a.k.a measurment noise
+m_noise:
+  # variance (sigma^2)
+  p_std: 0.05         # m
+  v_std: 0.08         # m/s
+  q_std: 0.001        # -
+  w_std: 0.02         # rad/s
+  
+  # bias
+  v_bias_std: 0.03    # m
+  w_bias_std: 0.005   # rad/s
+

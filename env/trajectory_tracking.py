@@ -10,20 +10,22 @@ from utils.nn import MLP
 from utils.randomize import randomize_parameters
 from utils.replay_multi import MultiDroneRenderer
 from utils.trajectory import TrajectoryManager, HypotrochoidTrajectory, CircularTrajectory
-from utils.math import acc_to_quat, quat_to_rotmat
+from utils.math import acc_to_quat, quat_to_rotmat, quat_multiply
 from utils.plotter import plot_rollout
 
 from dynamics.quadrotor_dynamics import QuadrotorDynamics
 from controller.controllers import DirectAllocation, SRT, CTBR, LVHR
 
 
-ACT_DIMS = {
-    "srt":    4,
-    "ctbr":   4,
-    "lvhr":   4,
-    "lvhr+g": 7,
-}
-CM_COLS = {"srt": 30, "ctbr": 34, "lvhr": 38, "lvhr+g": 41}
+ACT_DIMS = {"srt": 4, "ctbr":  4, "lvhr": 4,  "lvhr+g": 7}
+CM_COLS  = {"srt": 30, "ctbr": 34, "lvhr": 38, "lvhr+g": 41}
+
+def reset_noise_biases(cfg) -> dict:
+    N, device, mn = cfg.num_envs, cfg.device, cfg.env.m_noise
+    return {
+        "vel":  torch.randn(N, 3, device=device) * mn.v_bias_std,
+        "rate": torch.randn(N, 3, device=device) * mn.w_bias_std,
+    }
 
 def reset(cfg, traj, quadrotor, controller):
     pos0, vel0, acc0, _ = traj.get_reference(0)
@@ -40,7 +42,8 @@ def reset(cfg, traj, quadrotor, controller):
         max_TWR      = quadrotor.max_TWR,
         J            = quadrotor.J,
     )
-    return states, params
+    biases = reset_noise_biases(cfg)
+    return states, params, biases
 
 
 def reset_terminated(states, terminated, pos_ref, vel_ref, acc_ref):
@@ -55,14 +58,43 @@ def reset_terminated(states, terminated, pos_ref, vel_ref, acc_ref):
     return states
 
 
-def get_observation(states, pos_ref, vel_ref, acc_ref):
+def get_observation(cfg, states, pos_ref, vel_ref, acc_ref, biases):
+    N = cfg.num_envs
+    device = cfg.device
+    mn     = cfg.env.m_noise
+
+    # Add "measurement" noise
+    with torch.inference_mode():
+        noisy_states = states.clone()
+
+        noisy_states[:, 0:3] += torch.randn(N, 3, device=cfg.device) \
+        * mn.p_std
+
+        noisy_states[:, 3:6] += torch.randn(N, 3, device=cfg.device) \
+        * mn.v_std + torch.randn(N, 3, device=device) \
+        * biases["vel"]
+
+        noisy_states[:, 10:13] += torch.randn(N, 3, device=cfg.device) \
+        * mn.w_std + torch.randn(N, 3, device=device) \
+        * biases["rate"]
+
+        attitude = quat_to_rotmat(noisy_states[:, 6:10]).reshape(N, 9)
+
+        # Attitude Noise (maybe remove idk)
+        angle_noise = torch.randn(N, 3, device=device) * mn.q_std   # (N,3) rotation vector
+        half        = torch.norm(angle_noise, dim=-1, keepdim=True).clamp(min=1e-8) / 2
+        axis        = nn.functional.normalize(angle_noise, dim=-1)
+        dq          = torch.cat([torch.cos(half), axis * torch.sin(half)], dim=-1)
+        noisy_q     = quat_multiply(noisy_states[:, 6:10], dq)
+        noisy_q     = nn.functional.normalize(noisy_q, dim=-1)
+        noisy_attitude = quat_to_rotmat(noisy_q).reshape(N, 9) 
 
     return torch.cat([
-        pos_ref - states[:, 0:3],   
-        vel_ref - states[:, 3:6],   
+        pos_ref - noisy_states[:, 0:3],   
+        vel_ref - noisy_states[:, 3:6],   
         acc_ref,                    
-        quat_to_rotmat(states[:, 6:10]).reshape(states.shape[0], 9),            
-        states[:, 10:13],           
+        noisy_attitude,            
+        noisy_states[:, 10:13],           
     ], dim=-1)                      
 
 
@@ -135,14 +167,11 @@ def train(cfg: DictConfig):
     # traj = TrajectoryManager.from_togt(path, cfg.num_envs, cfg.device)
 
     controller = build_controller(cm, quadrotor, cfg)
-    
     policy    = MLP(layer_sizes=list(cfg.env.policy) + [ACT_DIMS[cm]],                        
                     activation=nn.ReLU,                             
                     output_activation=nn.Sigmoid(), 
                     output_bias_init=0.0
                     ).to(device)
-    
-
     optimizer = torch.optim.Adam(policy.parameters(), lr=cfg.env.lr)
 
     traj_data = torch.empty((cfg.steps, CM_COLS[cm]), device=device)
@@ -154,7 +183,7 @@ def train(cfg: DictConfig):
     for ep in range(cfg.episodes):
         traj.randomize()
 
-        states, last_params = reset(cfg, traj, quadrotor, controller)
+        states, last_param, biases = reset(cfg, traj, quadrotor, controller)
 
         ep_loss, num_updates  = 0.0, 0
         sq_error_sum          = torch.zeros(1, device=device)
@@ -169,8 +198,7 @@ def train(cfg: DictConfig):
                 window_loss  = torch.zeros(1, device=device)
 
             pos_ref, vel_ref, acc_ref, _ = traj.get_reference(t, speed_scale=s)
-
-            obs     = get_observation(states, pos_ref, vel_ref, acc_ref)
+            obs     = get_observation(cfg, states, pos_ref, vel_ref, acc_ref, biases)
             raw     = policy(obs)
 
             if cm == "lvhr+g":
@@ -230,17 +258,18 @@ def train(cfg: DictConfig):
     
     traj_np = traj_data.cpu().numpy()
 
-    plot_rollout(
-        traj_np        = traj_np,
-        dt             = cfg.dt,
-        label          = cfg.cm,
-        arm_length = float(quadrotor.arm_length[0, 0].cpu()),
-        arm_angle  = float(quadrotor.arm_angle[0].cpu()) * 180 / 3.14,
-        mass       = float(quadrotor.m[0].cpu()),
-        # save_path = f"/home/adame/torchAirBender/outputs/plots/{cm}_dashboard.png",  # uncomment to save instead of show
-    )
+    if not cfg.headless:
+        plot_rollout(
+            traj_np        = traj_np,
+            dt             = cfg.dt,
+            label          = cfg.cm,
+            arm_length = float(quadrotor.arm_length[0, 0].cpu()),
+            arm_angle  = float(quadrotor.arm_angle[0].cpu()) * 180 / 3.14,
+            mass       = float(quadrotor.m[0].cpu()),
+            # save_path = f"/home/adame/torchAirBender/outputs/plots/{cm}_dashboard.png",  # uncomment to save instead of show
+        )
 
-    MultiDroneRenderer(trajectory=traj_np, ref_trajectory=traj_np[:, 17:20]).run()
+        MultiDroneRenderer(trajectory=traj_np, ref_trajectory=traj_np[:, 17:20]).run()
 
 
 # ==================================================================
