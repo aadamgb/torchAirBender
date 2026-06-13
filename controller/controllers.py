@@ -168,7 +168,7 @@ class LVHR:
         wrench = torch.cat([Fz, tau], dim=-1)
 
         if gains is not None:
-            out = torch.cat([self.allocator(Fz, tau), wrench, v_des, yaw_rate_des, kv, kR, kw], dim=-1)
+            out = torch.cat([self.allocator(Fz, tau), wrench, v_des, yaw_rate_des, kv.unsqueeze(-1), kR.unsqueeze(-1), kw.unsqueeze(-1)], dim=-1)
         else:
             out = torch.cat([self.allocator(Fz, tau), wrench, v_des, yaw_rate_des], dim=-1)
 

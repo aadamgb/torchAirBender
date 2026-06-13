@@ -254,23 +254,22 @@ def train(cfg: DictConfig):
 def test(cfg: DictConfig):
     policies = [
         # {"type": "bptt",
-        #  "cm": "lvhr+g", 
-        #  "path": "/home/adame/torchAirBender/outputs/policies/racing/lvhr+g/uzh_0.50.pt",  
-        #  "color": (0.2, 0.6, 1.0)},
-
+        #  "cm": "srt", 
+        #  "path": "/home/adame/torchAirBender/outputs/policies/racing/srt/uzh_0.50.pt",  
+        #  "color": (1.0, 0.55, 0.0)},
+        # {"type": "bptt",
+        #  "cm": "ctbr", 
+        #  "path": "/home/adame/torchAirBender/outputs/policies/racing/ctbr/uzh_0.60.pt",  
+        #  "color": (1.0, 0.55, 0.0)},
+        # {"type": "bptt",
+        #  "cm": "lvhr", 
+        #  "path": "/home/adame/torchAirBender/outputs/policies/racing/lvhr/uzh_0.50.pt",  
+        #  "color": (1.0, 0.55, 0.0)},
         {"type": "bptt",
-         "cm": "ctbr", 
-         "path": "/home/adame/torchAirBender/outputs/policies/racing/ctbr/uzh_final.pt",  
-         "color": (0.2, 0.6, 1.0)},
-        {"type": "bptt",
-         "cm": "ctbr", 
-         "path": "/home/adame/torchAirBender/outputs/policies/racing/ctbr/uzh_0.60.pt",  
+         "cm": "lvhr+g", 
+         "path": "/home/adame/torchAirBender/outputs/policies/racing/lvhr+g/uzh_0.50.pt",  
          "color": (1.0, 0.55, 0.0)},
 
-        # {"type": "ppo",
-        #  "cm": "ctbr",
-        #  "path": "/home/adame/torchAirBender/outputs/policies/PPO/tt_ctbr_results.zip",
-        # "color": (1.0, 0.55, 0.0)},
     ]
     for p in policies:
         p["label"] = p["type"] + "_" + p["cm"] + "_" + Path(p["path"]).stem.split("_", 1)[-1]
@@ -278,7 +277,7 @@ def test(cfg: DictConfig):
     randomize = True
     seed      = None
     save      = True
-    csv_path  = "/home/adame/torchAirBender/outputs/policies/racing/data/uzh-05-lvhr+g.csv"
+    csv_path  = "/home/adame/torchAirBender/outputs/policies/racing/data/uzh_dist_ctbr.csv"
 
     if seed is not None:
         torch.manual_seed(seed)
@@ -294,7 +293,7 @@ def test(cfg: DictConfig):
 
     for spec in policies:
         print(f"\n  Rolling out: {spec['label']}  ({spec['path']})")
-        csv_path  = f"/home/adame/torchAirBender/outputs/policies/racing/data/uzh-05-{spec['cm']}.csv"
+        csv_path  = f"/home/adame/torchAirBender/outputs/policies/racing/data/disturbance/uzh-06-{spec['cm']}.csv"
 
         controller = build_controller(spec["cm"], quadrotor, cfg)
 
@@ -335,6 +334,11 @@ def test(cfg: DictConfig):
         states[:, 3:6]  = vel0.detach()
         states[:, 6:10] = acc_to_quat(acc0.detach())
 
+        # --- Disturbance config ---
+        DIST_X_MIN   = 5.0
+        DIST_X_MAX   = 10.0
+        DIST_ACC_Y   = 8   # m/s², tune this — equivalent to F/m of wind
+
         traj_data = torch.empty((cfg.steps, CM_COLS[spec["cm"]]), device=device)
 
         # Rollout 
@@ -350,6 +354,11 @@ def test(cfg: DictConfig):
                     actions = controller(states, raw)
 
                 states  = quadrotor.step(states, actions[:, 0:4])
+
+                # --- External disturbance: constant +Y acceleration in x ∈ [5, 10] ---
+                x_pos = states[:, 0]  # assuming state layout: [px, py, pz, vx, vy, vz, ...]
+                in_zone = (x_pos >= DIST_X_MIN) & (x_pos <= DIST_X_MAX)  # (num_envs,)
+                states[in_zone, 4] += DIST_ACC_Y * cfg.dt  # vy += a_y * dt
 
                 dist    = torch.linalg.norm(pos_ref - states[:, 0:3], dim=-1)
                 too_far = dist > cfg.env.max_dist_to_target
@@ -387,21 +396,21 @@ def test(cfg: DictConfig):
         })
 
         # ── Plot dashboard ───────────────────────────────────────────────
-        # plot_rollout(
-        #     traj_np    = traj_np,
-        #     dt         = cfg.dt,
-        #     label      = spec["label"],
-        #     arm_length = float(params.arm_length[0, 0].cpu()),
-        #     arm_angle  = float(params.arm_angle[0].cpu()),
-        #     mass       = float(params.mass[0].cpu()),
-        # )
+        plot_rollout(
+            traj_np    = traj_np,
+            dt         = cfg.dt,
+            label      = spec["label"],
+            arm_length = float(params.arm_length[0, 0].cpu()),
+            arm_angle  = float(params.arm_angle[0].cpu()),
+            mass       = float(params.mass[0].cpu()),
+        )
 
     gates_position, gates_rpy = load_gates_from_yaml(
         "/home/adame/torchAirBender/miscellaneous/race_tracks/uzh_7g_moved.yaml"
     )
-    RacingRenderer(
-        gates_position=gates_position,
-        gates_rpy=gates_rpy,
-        drones=drones, 
-        ref_trajectory=ref_traj,
-        trajectory=ref_traj).run()
+    # RacingRenderer(
+    #     gates_position=gates_position,
+    #     gates_rpy=gates_rpy,
+    #     drones=drones, 
+    #     ref_trajectory=ref_traj,
+    #     trajectory=ref_traj).run()
