@@ -27,7 +27,6 @@ Motor layout
 # ------------------------------------------------------------------
 # Helpers
 # ------------------------------------------------------------------
-@torch.jit.script
 def _compute_wrench(alloc_matrix: Tensor, action: Tensor) -> tuple[Tensor, Tensor]:
 
     W   = torch.bmm(alloc_matrix, action.unsqueeze(-1)).squeeze(-1) 
@@ -35,48 +34,82 @@ def _compute_wrench(alloc_matrix: Tensor, action: Tensor) -> tuple[Tensor, Tenso
     tau = W[..., 1:4]
     return Fz, tau
 
-@torch.jit.script
-def _translational_deriv(
-    v:  Tensor,
-    q:  Tensor,
-    Fz: Tensor,
-    m:  Tensor,
-    g:  Tensor,
-) -> tuple[Tensor, Tensor]:
+def _compute_derivatives(
+    p: Tensor,      v: Tensor,  q: Tensor,    w: Tensor,
+    Fz: Tensor,   tau: Tensor,
+    m: Tensor,      J: Tensor,  G: Tensor,
+) -> tuple[Tensor, Tensor, Tensor, Tensor]:
+    
+    B = torch.zeros_like(Fz)
+    R = quat_to_rotmat(q)
+    
+    thrust_body = torch.stack([B, B, Fz], dim=-1).unsqueeze(-1)
+    thrust_world = torch.bmm(R, thrust_body).squeeze(-1)
 
-    R = quat_to_rotmat(q) 
+    p_dot = v
+    v_dot = thrust_world / m.unsqueeze(-1) + G  
+    w_dot = (1.0 / J) * (tau - torch.linalg.cross(w, J * w))          
+    q_dot = quat_derivative(q, w)
 
-    thrust_body = torch.stack(
-        [torch.zeros_like(Fz), torch.zeros_like(Fz), Fz], dim=-1
-    ).unsqueeze(-1)                                                   
-    thrust_world = torch.bmm(R, thrust_body).squeeze(-1)              
+    return p_dot, v_dot, q_dot, w_dot       
 
-    v_dot = thrust_world / m.unsqueeze(-1) + g                        
-    return v, v_dot
-
-@torch.jit.script
-def _rotational_deriv(
-    q:   Tensor,
-    w:   Tensor,
-    tau: Tensor,
-    J:   Tensor,
-) -> tuple[Tensor, Tensor]:
-
-    J_inv = 1.0 / J
-    w_dot = J_inv * (tau - torch.linalg.cross(w, J * w))          
-    q_dot = quat_derivative(q, w)                                  
-    return q_dot, w_dot
-
-@torch.jit.script
 def integrate_euler(
     dt: float,
     p: Tensor, v: Tensor, q: Tensor, w: Tensor,
     p_dot: Tensor, v_dot: Tensor, q_dot: Tensor, w_dot: Tensor,
 ) -> tuple[Tensor, Tensor, Tensor, Tensor]:
+    """
+    (NOT USED) Euler explicit method 
+    """
     v_next = v + v_dot * dt
     p_next = p + v_next * dt
     q_next = nn.functional.normalize(q + q_dot * dt, dim=-1)               
     w_next = w + w_dot * dt
+    return p_next, v_next, q_next, w_next
+
+def integrate_rk4(
+    dt: float,
+    p: Tensor,      v: Tensor,  q: Tensor,    w: Tensor,
+    Fz: Tensor,   tau: Tensor,
+    m: Tensor,      J: Tensor,  G: Tensor,
+) -> tuple[Tensor, Tensor, Tensor, Tensor]:
+    
+    h = dt
+    h2 = dt * 0.5
+
+    # k1 — derivatives at current state
+    p_dot1, v_dot1, q_dot1, w_dot1 = _compute_derivatives(p, v, q, w, Fz, tau, m, J, G)
+
+    # k2 — derivatives at midpoint using k1
+    p2 = p + h2 * p_dot1
+    v2 = v + h2 * v_dot1
+    q2 = q + h2 * q_dot1   
+    w2 = w + h2 * w_dot1
+    p_dot2, v_dot2, q_dot2, w_dot2 = _compute_derivatives(p2, v2, q2, w2, Fz, tau, m, J, G)
+
+    # k3 — derivatives at midpoint using k2
+    p3 = p + h2 * p_dot2
+    v3 = v + h2 * v_dot2
+    q3 = q + h2 * q_dot2
+    w3 = w + h2 * w_dot2
+    p_dot3, v_dot3, q_dot3, w_dot3 = _compute_derivatives(p3, v3, q3, w3, Fz, tau, m, J, G)
+
+    # k4 — derivatives at end of interval using k3
+    p4 = p + h * p_dot3
+    v4 = v + h * v_dot3
+    q4 = q + h * q_dot3
+    w4 = w + h * w_dot3
+    p_dot4, v_dot4, q_dot4, w_dot4 = _compute_derivatives(p4, v4, q4, w4, Fz, tau, m, J, G)
+
+    # Weighted combination: (k1 + 2k2 + 2k3 + k4) / 6
+    c = 1.0 / 6.0
+    p_next = p + c * h * (p_dot1 + 2.0 * p_dot2 + 2.0 * p_dot3 + p_dot4)
+    v_next = v + c * h * (v_dot1 + 2.0 * v_dot2 + 2.0 * v_dot3 + v_dot4)
+    q_next = nn.functional.normalize(
+        q + c * h * (q_dot1 + 2.0 * q_dot2 + 2.0 * q_dot3 + q_dot4), dim=-1
+    )
+    w_next = w + c * h * (w_dot1 + 2.0 * w_dot2 + 2.0 * w_dot3 + w_dot4)
+
     return p_next, v_next, q_next, w_next
 
 # ------------------------------------------------------------------
@@ -102,19 +135,16 @@ def _step_fwd(
     Omegas = state[..., 13:17]
 
     Omegas_cmd = torch.sqrt(torch.clamp(thrusts / a0.view(-1, 1), min=1e-3))
-    Omegas_dot = (Omegas_cmd - Omegas) / motor_tau  # TODO: Improve this.... clamp rate limits
+    Omegas_dot = (Omegas_cmd - Omegas) / motor_tau  
     Omegas_next = Omegas + Omegas_dot * dt
+
     thrusts_next = a0.view(-1, 1) * Omegas_next**2
 
     Fz, tau = _compute_wrench(alloc, thrusts_next)
-    p_dot, v_dot = _translational_deriv(v, q, Fz, m, G)
-    q_dot, w_dot = _rotational_deriv(q, w, tau, J)
 
-
-    p_next, v_next, q_next, w_next = integrate_euler(
-        dt, p, v, q, w, p_dot, v_dot, q_dot, w_dot
+    p_next, v_next, q_next, w_next = integrate_rk4(
+        dt, p, v, q, w, Fz, tau, m, J, G
     )
-
 
     return torch.cat([p_next, v_next, q_next, w_next, Omegas_next], dim=-1)
 
@@ -136,15 +166,12 @@ def _step_bck(
     w = state[..., 10:13]
 
     Fz, tau = _compute_wrench(alloc, action)
-    p_dot, v_dot = _translational_deriv(v, q, Fz, m, G)
-    q_dot, w_dot = _rotational_deriv(q, w, tau, J)
-
-    p_next, v_next, q_next, w_next = integrate_euler(
-        dt, p, v, q, w, p_dot, v_dot, q_dot, w_dot
+    
+    p_next, v_next, q_next, w_next = integrate_rk4(
+        dt, p, v, q, w, Fz, tau, m, J, G
     )
 
     return torch.cat([p_next, v_next, q_next, w_next], dim=-1)
-
 
 # ===========================================================
 #                        Main class 
@@ -201,7 +228,6 @@ class QuadrotorDynamics:
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
-
     def _rebuild_alloc_matrix(self):
         s  = torch.sin(self.arm_angle)     
         c  = torch.cos(self.arm_angle)

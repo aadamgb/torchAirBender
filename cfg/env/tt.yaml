@@ -16,7 +16,7 @@ traj:
   num_harmonics: 3  
   z_offset: 3.0
   A: 1.0
-  w: 3.0
+  w: 1.0
   phi: 2.0
   dt: 0.01
 
