@@ -16,6 +16,8 @@ from utils.plotter import plot_rollout
 from dynamics.quadrotor_dynamics import QuadrotorDynamics
 from controller.controllers import DirectAllocation, SRT, CTBR, LVHR
 
+from utils.plot_noise import StateLogger
+
 
 ACT_DIMS = {"srt": 4, "ctbr":  4, "lvhr": 4,  "lvhr+g": 7}
 CM_COLS  = {"srt": 30, "ctbr": 34, "lvhr": 38, "lvhr+g": 41}
@@ -58,7 +60,7 @@ def reset_terminated(states, terminated, pos_ref, vel_ref, acc_ref):
     return states
 
 
-def get_observation(cfg, states, pos_ref, vel_ref, acc_ref, biases):
+def get_observation(cfg, states, pos_ref, vel_ref, acc_ref, biases, logger=None):
     N = cfg.num_envs
     device = cfg.device
     mn     = cfg.env.m_noise
@@ -87,7 +89,10 @@ def get_observation(cfg, states, pos_ref, vel_ref, acc_ref, biases):
         dq          = torch.cat([torch.cos(half), axis * torch.sin(half)], dim=-1)
         noisy_q     = quat_multiply(noisy_states[:, 6:10], dq)
         noisy_q     = nn.functional.normalize(noisy_q, dim=-1)
-        noisy_attitude = quat_to_rotmat(noisy_q).reshape(N, 9) 
+        noisy_attitude = quat_to_rotmat(noisy_q).reshape(N, 9)
+
+        if logger is not None:
+            logger.log(states, noisy_states) 
 
     return torch.cat([
         pos_ref - noisy_states[:, 0:3],   
@@ -162,6 +167,9 @@ def train(cfg: DictConfig):
 
     quadrotor  = QuadrotorDynamics(cfg)
     traj      = TrajectoryManager.from_harmonics(cfg.env.traj, num_envs, device)
+    
+    # logger = StateLogger(env_idx=0)   # track env 0
+    logger = None
 
     # path = "/home/adame/torchAirBender/miscellaneous/trajectories/TOGT/togt_traj.csv"
     # traj = TrajectoryManager.from_togt(path, cfg.num_envs, cfg.device)
@@ -198,7 +206,7 @@ def train(cfg: DictConfig):
                 window_loss  = torch.zeros(1, device=device)
 
             pos_ref, vel_ref, acc_ref, _ = traj.get_reference(t, speed_scale=s)
-            obs     = get_observation(cfg, states, pos_ref, vel_ref, acc_ref, biases)
+            obs     = get_observation(cfg, states, pos_ref, vel_ref, acc_ref, biases, logger=logger)
             raw     = policy(obs)
 
             if cm == "lvhr+g":
@@ -259,6 +267,7 @@ def train(cfg: DictConfig):
     traj_np = traj_data.cpu().numpy()
 
     if not cfg.headless:
+        # logger.plot(dt=cfg.dt)
         plot_rollout(
             traj_np        = traj_np,
             dt             = cfg.dt,
