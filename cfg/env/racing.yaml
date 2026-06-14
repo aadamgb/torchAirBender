@@ -5,6 +5,13 @@ policy: [21, 128, 128]   # only input and hidden layers
 
 lr: 1e-3
 
+# loss_weights:
+#   pos: 2.0
+#   vel: 1.0
+#   quat: 0.2
+#   omega: 0.1
+#   thrust: 0.01
+
 loss_weights:
   pos: 2.0
   vel: 1.0
@@ -35,3 +42,18 @@ test_traj: "/home/adame/torchAirBender/miscellaneous/trajectories/TOGT/aos_togt_
 
 
 max_mass_norm_thrust: 3.5
+
+
+
+# --- Noise added to Quad's States --
+#     |->  a.k.a measurment noise
+m_noise:
+  # variance (sigma^2)
+  p_std: 0.05         # m
+  v_std: 0.08         # m/s
+  q_std: 0.001        # -
+  w_std: 0.02         # rad/s
+  
+  # bias
+  v_bias_std: 0.03    # m
+  w_bias_std: 0.005   # rad/s

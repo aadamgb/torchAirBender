@@ -67,7 +67,7 @@ class TrajectoryManager:
 
     def get_reference(self, t: int, speed_scale: float = 1.0):
             if self._mode in ("togt", "lol"):
-                return self._get_togt(t, speed_scale)
+                return self._get_togt(t)
             else:
                 return self._get_harmonics(t)        
 
@@ -87,15 +87,20 @@ class TrajectoryManager:
 
     # ── private ───────────────────────────────────────────────────────────
 
-    def _get_togt(self, t: int, speed_scale: float):
+    def _get_togt(self, t: int, speed_scale = 1.0):
         scaled_t = min(int(t * speed_scale), self._length - 1)
 
         pos = self._trajectory["pos"][scaled_t].unsqueeze(0).expand(self.num_envs, -1)
-        vel = self._trajectory["vel"][scaled_t].unsqueeze(0).expand(self.num_envs, -1) * speed_scale
-        acc = self._trajectory["acc"][scaled_t].unsqueeze(0).expand(self.num_envs, -1) * speed_scale ** 2
-        b1d = self._compute_b1d(self._trajectory["vel"][scaled_t])
+        quat = self._trajectory["quat"][scaled_t].unsqueeze(0).expand(self.num_envs, -1)
+        vel = self._trajectory["vel"][scaled_t].unsqueeze(0).expand(self.num_envs, -1) 
+        omega = self._trajectory["omega"][scaled_t].unsqueeze(0).expand(self.num_envs, -1)
+        acc_lin = self._trajectory["acc_lin"][scaled_t].unsqueeze(0).expand(self.num_envs, -1) 
+        acc_rot = self._trajectory["acc_rot"][scaled_t].unsqueeze(0).expand(self.num_envs, -1)
+        thrust = self._trajectory["thrust"][scaled_t].unsqueeze(0).expand(self.num_envs, -1)
+        jerk = self._trajectory["jerk"][scaled_t].unsqueeze(0).expand(self.num_envs, -1)
+        snap = self._trajectory["snap"][scaled_t].unsqueeze(0).expand(self.num_envs, -1)
 
-        return pos, vel, acc, b1d
+        return pos, vel, acc_lin, acc_rot, quat, omega, thrust, jerk, snap
 
     def _get_harmonics(self, t: int):
         t_sec        = t * self._cfg.dt

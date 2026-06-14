@@ -9,7 +9,7 @@ from pathlib import Path
 from utils.nn import MLP
 from utils.randomize import randomize_parameters
 from utils.replay_multi import MultiDroneRenderer
-from utils.trajectory import TrajectoryManager, HypotrochoidTrajectory, CircularTrajectory
+from utils.trajectory import TrajectoryManager
 from utils.math import acc_to_quat, quat_to_rotmat, quat_multiply
 from utils.plotter import plot_rollout
 
@@ -30,7 +30,7 @@ def reset_noise_biases(cfg) -> dict:
     }
 
 def reset(cfg, traj, quadrotor, controller):
-    pos0, vel0, acc0, _ = traj.get_reference(0)
+    pos0, vel0, acc0, *_ = traj.get_reference(0)
     states = torch.zeros((cfg.num_envs, 17), device=cfg.device)
     states[:, 0:3]  = pos0.detach()
     states[:, 3:6]  = vel0.detach()
@@ -83,7 +83,7 @@ def get_observation(cfg, states, pos_ref, vel_ref, acc_ref, biases, logger=None)
         attitude = quat_to_rotmat(noisy_states[:, 6:10]).reshape(N, 9)
 
         # Attitude Noise (maybe remove idk)
-        angle_noise = torch.randn(N, 3, device=device) * mn.q_std   # (N,3) rotation vector
+        angle_noise = torch.randn(N, 3, device=device) * mn.q_std   
         half        = torch.norm(angle_noise, dim=-1, keepdim=True).clamp(min=1e-8) / 2
         axis        = nn.functional.normalize(angle_noise, dim=-1)
         dq          = torch.cat([torch.cos(half), axis * torch.sin(half)], dim=-1)
@@ -114,7 +114,6 @@ def compute_loss(states, pos_ref, vel_ref, acc_ref, weights, mask=None):
     vel_loss  = torch.linalg.norm(v - s[:, 3:6], dim=-1).mean()
     rate_loss = (s[:, 10:13] ** 2).sum(dim=-1).mean()
 
-    from utils.math import quat_to_rotmat
     gravity    = torch.tensor([0., 0., -9.81], device=s.device)
     thrust_dir = torch.nn.functional.normalize(a + gravity, dim=-1)
     body_z     = quat_to_rotmat(s[:, 6:10])[:, :, 2]
@@ -147,9 +146,6 @@ def build_controller(cm_type, quadrotor, cfg):
             J=quadrotor.J,
             g=quadrotor.g,
         )
-
-    elif cm_type == "lvyr-indi":
-        raise NotImplementedError("INDI inner loop not yet implemented")
     else:
         raise ValueError(f"Unknown control mode: {cm_type}")
     
@@ -166,13 +162,13 @@ def train(cfg: DictConfig):
     os.makedirs(out_dir, exist_ok=True)
 
     quadrotor  = QuadrotorDynamics(cfg)
-    traj      = TrajectoryManager.from_harmonics(cfg.env.traj, num_envs, device)
+    # traj      = TrajectoryManager.from_harmonics(cfg.env.traj, num_envs, device)
     
     # logger = StateLogger(env_idx=0)   # track env 0
     logger = None
 
-    # path = "/home/adame/torchAirBender/miscellaneous/trajectories/TOGT/togt_traj.csv"
-    # traj = TrajectoryManager.from_togt(path, cfg.num_envs, cfg.device)
+    path = "/home/adame/torchAirBender/miscellaneous/trajectories/TOGT/straight_line.csv"
+    traj = TrajectoryManager.from_togt(path, cfg.num_envs, cfg.device)
 
     controller = build_controller(cm, quadrotor, cfg)
     policy    = MLP(layer_sizes=list(cfg.env.policy) + [ACT_DIMS[cm]],                        
@@ -186,10 +182,10 @@ def train(cfg: DictConfig):
     last_saved_w = 1.0
     SAVE_INTERVAL = 0.1
     best_loss    = float("inf")
-    s = 0.3
+    s = 1.0
 
     for ep in range(cfg.episodes):
-        traj.randomize()
+        # traj.randomize()
 
         states, last_param, biases = reset(cfg, traj, quadrotor, controller)
 
@@ -205,7 +201,7 @@ def train(cfg: DictConfig):
                 window_start = t
                 window_loss  = torch.zeros(1, device=device)
 
-            pos_ref, vel_ref, acc_ref, _ = traj.get_reference(t, speed_scale=s)
+            pos_ref, vel_ref, acc_ref, *_ = traj.get_reference(t, speed_scale=s)
             obs     = get_observation(cfg, states, pos_ref, vel_ref, acc_ref, biases, logger=logger)
             raw     = policy(obs)
 
@@ -287,23 +283,12 @@ def train(cfg: DictConfig):
 
 def test(cfg: DictConfig):
     policies = [
-        # {"type": "bptt",
-        #  "cm": "srt", 
-        #  "path": "/home/adame/torchAirBender/outputs/policies/TT/srt/trck_1.80.pt",  
-        #  "color": (0.2, 0.6, 1.0)},
-        {"type": "bptt",
-         "cm": "ctbr", 
+        {"cm": "ctbr", 
          "path": "/home/adame/torchAirBender/outputs/policies/TT/ctbr/trck_1.90.pt",  
          "color": (0.2, 0.6, 1.0)},
-        # {"type": "bptt",
-        #  "cm": "lvhr", 
+        # {"cm": "lvhr", 
         #  "path": "/home/adame/torchAirBender/outputs/policies/TT/lvhr/trck_1.80.pt",  
         #  "color": (0.2, 0.6, 1.0)},
-
-        # {"type": "ppo",
-        #  "cm": "ctbr",
-        #  "path": "/home/adame/torchAirBender/outputs/policies/PPO/tt_ctbr_results.zip",
-        # "color": (1.0, 0.55, 0.0)},
     ]
     for p in policies:
         p["label"] = p["type"] + "_" + p["cm"] + "_" + Path(p["path"]).stem.split("_", 1)[-1]
@@ -329,27 +314,16 @@ def test(cfg: DictConfig):
 
         controller = build_controller(spec["cm"], quadrotor, cfg)
 
-        # Load policy 
-        if spec["type"] == "ppo":
-            from stable_baselines3 import PPO as SB3PPO
-            sb3_model = SB3PPO.load(spec["path"], device=device)
-            def get_action(obs):
-                action_np, _ = sb3_model.predict(
-                    obs.cpu().numpy(), deterministic=True
-                )
-                return torch.tensor(action_np, device=device, dtype=torch.float32)
-
-        else:  # bptt
-            policy = MLP(
-                layer_sizes       = list(cfg.env.policy) + [ACT_DIMS[spec["cm"]]],
-                activation        = nn.ReLU,
-                output_activation = nn.Sigmoid(),
-                output_bias_init  = 0.0,
-            ).to(device)
-            policy.load_state_dict(torch.load(spec["path"], map_location=device))
-            policy.eval()
-            def get_action(obs):
-                return policy(obs)
+        policy = MLP(
+            layer_sizes       = list(cfg.env.policy) + [ACT_DIMS[spec["cm"]]],
+            activation        = nn.ReLU,
+            output_activation = nn.Sigmoid(),
+            output_bias_init  = 0.0,
+        ).to(device)
+        policy.load_state_dict(torch.load(spec["path"], map_location=device))
+        policy.eval()
+        def get_action(obs):
+            return policy(obs)
 
         # Randomize dynamics 
         if randomize:
@@ -393,7 +367,7 @@ def test(cfg: DictConfig):
 
         traj_np = traj_data.cpu().numpy()
 
-        # ── Optionally save reference CSV ────────────────────────────────
+        # Optionally save reference CSV 
         if ref_traj is None and save:
             os.makedirs(os.path.dirname(csv_path), exist_ok=True)
             ref_data = traj_np[:, 17:26]  # [px,py,pz,vx,vy,vz,ax,ay,az]
@@ -411,6 +385,7 @@ def test(cfg: DictConfig):
             "color": spec.get("color", (0.2, 0.6, 1.0)),
             "label": spec["label"],
         })
+
 
         plot_rollout(
             traj_np    = traj_np,

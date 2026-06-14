@@ -40,12 +40,20 @@ def load_TOGT(path: str, steps = None, device=None) -> dict:
     assert len(df) >= steps, f"Trajectory too short: {len(df)} rows < {steps} steps"
 
     pos = torch.tensor(df[["p_x", "p_y", "p_z"]].values[:steps],         dtype=torch.float32, device=device)
+    quat = torch.tensor(df[["q_w", "q_x", "q_y", "q_z"]].values[:steps],         dtype=torch.float32, device=device)
     vel = torch.tensor(df[["v_x", "v_y", "v_z"]].values[:steps],         dtype=torch.float32, device=device)
-    acc = torch.tensor(df[["a_lin_x", "a_lin_y", "a_lin_z"]].values[:steps], dtype=torch.float32, device=device)
+    omega = torch.tensor(df[["w_x", "w_y", "w_z"]].values[:steps],         dtype=torch.float32, device=device)
+    acc_lin = torch.tensor(df[["a_lin_x", "a_lin_y", "a_lin_z"]].values[:steps], dtype=torch.float32, device=device)
+    acc_rot = torch.tensor(df[["a_rot_x", "a_rot_y", "a_rot_z"]].values[:steps], dtype=torch.float32, device=device)
+    thrust = torch.tensor(df[["u_1", "u_2", "u_3", "u_4"]].values[:steps],         dtype=torch.float32, device=device)
+    jerk = torch.tensor(df[["jerk_x", "jerk_y", "jerk_z"]].values[:steps], dtype=torch.float32, device=device)
+    snap = torch.tensor(df[["snap_x", "snap_y", "snap_z"]].values[:steps], dtype=torch.float32, device=device)
 
     dt = float(df["t"].iloc[1] - df["t"].iloc[0])
 
-    return {"pos": pos, "vel": vel, "acc": acc, "dt": dt}
+    return {"pos": pos, "quat": quat, "vel": vel, "omega": omega , 
+            "acc_lin": acc_lin, "acc_rot": acc_rot, "thrust": thrust, 
+            "jerk": jerk, "snap": snap, "dt": dt}
 
 
 def load_LOL(path: str, steps = None, device=None, dt: float = 0.001) -> dict:
